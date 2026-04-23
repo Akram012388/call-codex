@@ -100,6 +100,39 @@ function fakeAppServer() {
 
         if (request.method === "turn/interrupt") {
           ws.send(JSON.stringify({ id: request.id, result: {} }));
+          return;
+        }
+
+        if (request.method === "thread/read") {
+          ws.send(
+            JSON.stringify({
+              id: request.id,
+              result: {
+                thread: {
+                  id: "thread-test",
+                  turns: [
+                    {
+                      id: "turn-test",
+                      items: [
+                        {
+                          type: "agentMessage",
+                          id: "agent-1",
+                          text: "CALL-CODEX readback",
+                          phase: "final_answer",
+                          memoryCitation: null,
+                        },
+                      ],
+                      status: "completed",
+                      error: null,
+                      startedAt: 1,
+                      completedAt: 2,
+                      durationMs: 1000,
+                    },
+                  ],
+                },
+              },
+            }),
+          );
         }
       },
     },
@@ -138,9 +171,14 @@ describe("AppServerClient", () => {
         threadId: thread.thread.id,
         turnId: steered.turnId,
       });
+      const read = await client.readThread({
+        threadId: thread.thread.id,
+        includeTurns: true,
+      });
 
       expect(thread.thread.id).toBe("thread-test");
       expect(turn.turn.id).toBe("turn-test");
+      expect(read.thread.turns[0]?.status).toBe("completed");
       expect(calls.map((call) => call.method)).toEqual([
         "initialize",
         "thread/start",
@@ -148,6 +186,7 @@ describe("AppServerClient", () => {
         "turn/start",
         "turn/steer",
         "turn/interrupt",
+        "thread/read",
       ]);
     } finally {
       client.close();

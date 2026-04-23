@@ -461,10 +461,11 @@ Status: implemented for the initial messaging lane. `call_create` creates real C
 
 - Implement `call_update`, `call_cancel`, `call_close`, and `call_transcript`.
 - Implement `call_wake`, `call_steer`, and `call_interrupt`.
+- Refresh active worker state through `thread/read`.
 - Tighten skill behavior.
 - Test through Codex macOS app.
 
-Status: partially implemented. Explicit worker control now supports `turn/start`, `turn/steer`, and `turn/interrupt`, with active turn IDs persisted on participants. Remaining polish is live event reading, automatic completed-turn cleanup, and richer `call_status` progress.
+Status: partially implemented. Explicit worker control now supports `turn/start`, `turn/steer`, and `turn/interrupt`, with active turn IDs persisted on participants. `call_status` now reads active worker threads, reports recent assistant output, exposes terminal turn state, and auto-clears completed, failed, or interrupted turns. Remaining polish is event subscriptions, richer transcript import, and full Codex macOS app smoke testing.
 
 ### Milestone 6: Public-Ready Plugin
 

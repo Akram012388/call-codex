@@ -72,6 +72,39 @@ function fakeControlAppServer() {
 
         if (request.method === "turn/interrupt") {
           ws.send(JSON.stringify({ id: request.id, result: {} }));
+          return;
+        }
+
+        if (request.method === "thread/read") {
+          ws.send(
+            JSON.stringify({
+              id: request.id,
+              result: {
+                thread: {
+                  id: "thread-control",
+                  turns: [
+                    {
+                      id: "turn-control",
+                      items: [
+                        {
+                          type: "agentMessage",
+                          id: "agent-control",
+                          text: "Mission complete. The line is clear.",
+                          phase: "final_answer",
+                          memoryCitation: null,
+                        },
+                      ],
+                      status: "completed",
+                      error: null,
+                      startedAt: 1,
+                      completedAt: 2,
+                      durationMs: 1000,
+                    },
+                  ],
+                },
+              },
+            }),
+          );
         }
       },
     },
@@ -198,6 +231,75 @@ describe("CALL-CODEX scaffold tools", () => {
         "turn/steer",
         "initialize",
         "turn/interrupt",
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("call_status refreshes worker progress and clears finished turns", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const { server, calls } = fakeControlAppServer();
+    upsertRuntime({
+      url: `ws://127.0.0.1:${server.port}`,
+      pid: process.pid,
+      status: "running",
+    });
+
+    try {
+      const created = await handleToolCall("call_create", {
+        title: "Progress call",
+        workers: [{ name: "reader", role: "worker", brief: "report back" }],
+      });
+      const callId = "call" in created && created.call ? created.call.id : "";
+      setParticipantThreadId({
+        callId,
+        name: "reader",
+        threadId: "thread-control",
+      });
+
+      const wake = await handleToolCall("call_wake", {
+        call_id: callId,
+        participant: "reader",
+        prompt: "Finish and report.",
+      });
+      const status = await handleToolCall("call_status", { call_id: callId });
+      const statusResult = status as {
+        worker_progress?: {
+          workers: Array<{
+            latest_assistant_messages: Array<{ text: string }>;
+          }>;
+          auto_cleared: Array<{ status: string }>;
+        };
+        participants?: Array<{ active_turn_id: string; status: string }>;
+      };
+
+      expect(wake.ok).toBe(true);
+      expect(status.ok).toBe(true);
+      expect(
+        statusResult.worker_progress
+          ? statusResult.worker_progress.workers[0]
+              ?.latest_assistant_messages[0]?.text
+          : "",
+      ).toBe("Mission complete. The line is clear.");
+      expect(
+        statusResult.worker_progress
+          ? statusResult.worker_progress.auto_cleared[0]?.status
+          : "",
+      ).toBe("completed");
+      expect(
+        statusResult.participants
+          ? statusResult.participants[0]?.active_turn_id
+          : "",
+      ).toBe("");
+      expect(
+        statusResult.participants ? statusResult.participants[0]?.status : "",
+      ).toBe("done");
+      expect(calls.map((call) => call.method)).toEqual([
+        "initialize",
+        "turn/start",
+        "initialize",
+        "thread/read",
       ]);
     } finally {
       server.stop(true);

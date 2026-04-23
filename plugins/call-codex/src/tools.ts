@@ -24,6 +24,8 @@ import {
   userMessageItem,
 } from "./app-server/client";
 import type { MessageRow, ParticipantRow, RuntimeState } from "./bus";
+import type { ThreadItem } from "./app-server/generated/v2/ThreadItem";
+import type { Turn } from "./app-server/generated/v2/Turn";
 
 const prioritySchema = z
   .enum(["low", "normal", "high", "urgent"])
@@ -569,6 +571,144 @@ function missingParticipant(tool: string, callId: string, participant: string) {
   };
 }
 
+function latestAssistantText(items: ThreadItem[]) {
+  return items
+    .filter(
+      (item): item is Extract<ThreadItem, { type: "agentMessage" }> =>
+        item.type === "agentMessage" && item.text.trim().length > 0,
+    )
+    .slice(-3)
+    .map((item) => ({
+      id: item.id,
+      text: item.text,
+      phase: item.phase,
+    }));
+}
+
+function turnErrorSummary(turn: Turn) {
+  if (!turn.error) return null;
+  return JSON.stringify(turn.error);
+}
+
+function participantStatusForTurn(turn: Turn) {
+  if (turn.status === "completed") return "done";
+  if (turn.status === "failed") return "failed";
+  if (turn.status === "interrupted") return "blocked";
+  return "running";
+}
+
+function isTerminalTurn(turn: Turn) {
+  return (
+    turn.status === "completed" ||
+    turn.status === "failed" ||
+    turn.status === "interrupted"
+  );
+}
+
+async function refreshWorkerProgress(input: {
+  callId: string;
+  participants: ParticipantRow[];
+}) {
+  const active = input.participants.filter(
+    (participant) => participant.thread_id && participant.active_turn_id,
+  );
+  if (active.length === 0) {
+    return {
+      refreshed: false,
+      active_count: 0,
+      workers: [],
+      auto_cleared: [],
+    };
+  }
+
+  const boot = await bootManagedAppServer();
+  const runtime = requireRuntime(boot.runtime);
+  const client = new AppServerClient(runtime.url);
+  const workers = [];
+  const autoCleared = [];
+
+  try {
+    for (const participant of active) {
+      try {
+        const read = await client.readThread({
+          threadId: participant.thread_id,
+          includeTurns: true,
+        });
+        const turn =
+          read.thread.turns.find(
+            (item) => item.id === participant.active_turn_id,
+          ) ??
+          read.thread.turns.at(-1) ??
+          null;
+
+        if (!turn) {
+          workers.push({
+            participant: participant.name,
+            thread_id: participant.thread_id,
+            active_turn_id: participant.active_turn_id,
+            status: "unknown",
+            latest_assistant_messages: [],
+            error: "Active turn was not present in thread/read.",
+          });
+          continue;
+        }
+
+        const status = participantStatusForTurn(turn);
+        const assistantMessages = latestAssistantText(turn.items);
+        const progress = {
+          participant: participant.name,
+          thread_id: participant.thread_id,
+          active_turn_id: participant.active_turn_id,
+          turn_id: turn.id,
+          turn_status: turn.status,
+          participant_status: status,
+          started_at: turn.startedAt,
+          completed_at: turn.completedAt,
+          duration_ms: turn.durationMs,
+          latest_assistant_messages: assistantMessages,
+          error: turnErrorSummary(turn),
+        };
+        workers.push(progress);
+
+        if (isTerminalTurn(turn)) {
+          clearParticipantActiveTurn({
+            callId: input.callId,
+            name: participant.name,
+            status,
+            currentTask:
+              turn.status === "completed"
+                ? "Completed."
+                : (turnErrorSummary(turn) ?? `Turn ${turn.status}.`),
+          });
+          autoCleared.push({
+            participant: participant.name,
+            turn_id: turn.id,
+            status: turn.status,
+          });
+        }
+      } catch (error) {
+        workers.push({
+          participant: participant.name,
+          thread_id: participant.thread_id,
+          active_turn_id: participant.active_turn_id,
+          status: "read_failed",
+          latest_assistant_messages: [],
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  } finally {
+    client.close();
+  }
+
+  return {
+    refreshed: true,
+    active_count: active.length,
+    workers,
+    auto_cleared: autoCleared,
+  };
+}
+
 async function interruptActiveParticipants(input: {
   callId: string;
   participants: ParticipantRow[];
@@ -1028,6 +1168,15 @@ export async function handleToolCall(name: string, args: unknown) {
     case "call_status": {
       const parsed = parse(statusSchema, name, args);
       if (!parsed.ok) return parsed;
+      const initialBundle = getCallBundle(
+        parsed.data.call_id,
+        parsed.data.include_recent_messages,
+      );
+      if (!initialBundle) return missingCall(name, parsed.data.call_id);
+      const workerProgress = await refreshWorkerProgress({
+        callId: parsed.data.call_id,
+        participants: initialBundle.participants,
+      });
       const bundle = getCallBundle(
         parsed.data.call_id,
         parsed.data.include_recent_messages,
@@ -1037,6 +1186,7 @@ export async function handleToolCall(name: string, args: unknown) {
         ok: true,
         tool: name,
         runtime: getRuntime(),
+        worker_progress: workerProgress,
         ...bundle,
       };
     }

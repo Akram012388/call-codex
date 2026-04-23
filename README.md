@@ -75,7 +75,9 @@ The repo-local plugin scaffold now lives under `plugins/call-codex` with a Codex
 
 `call_wake`, `call_steer`, and `call_interrupt` now move workers from parked threads into active missions through `turn/start`, `turn/steer`, and `turn/interrupt`, with active turn IDs tracked on the local board.
 
-The next step is richer lifecycle polish: reading worker turn events, clearing completed turns automatically, and showing live worker progress in `call_status`.
+`call_status` now reads active worker threads with `thread/read`, shows recent assistant output in `worker_progress`, reports completion/failure/interruption, and clears finished active turns from the local board.
+
+The next step is richer lifecycle polish: event subscriptions, better transcript import from worker turns, and tighter macOS app smoke testing.
 
 ## Spirit
 

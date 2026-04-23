@@ -15,7 +15,7 @@ CALL-CODEX lets Codex coordinate Codex through app-server calls. Treat the macOS
 - Use `call_send` for one worker and `call_broadcast` for everyone on the line.
 - Use `call_wake` to start active work; use `call_steer` only after a worker has an active turn.
 - Use `call_interrupt` for the worker brake, then inspect `call_status`.
-- Use `call_status` before summarizing progress.
+- Use `call_status` before summarizing progress; trust its `worker_progress` block for recent worker output and auto-cleared turns.
 - Use `call_close` when the call is done.
 - Never call these workflows orchestration in user-facing copy. It is a call.
 
