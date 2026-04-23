@@ -118,6 +118,56 @@ function fakeControlAppServer() {
   return { server, calls };
 }
 
+function fakeFailingReadAppServer() {
+  const calls: Array<{ method: string; params: unknown }> = [];
+  const server = Bun.serve({
+    port: 0,
+    fetch(request, server) {
+      if (server.upgrade(request)) return;
+      return new Response("CALL-CODEX fake failing read app-server");
+    },
+    websocket: {
+      message(ws, message) {
+        const request = JSON.parse(String(message)) as {
+          id: number;
+          method: string;
+          params: unknown;
+        };
+        calls.push({ method: request.method, params: request.params });
+
+        if (request.method === "initialize") {
+          ws.send(
+            JSON.stringify({
+              id: request.id,
+              result: {
+                userAgent: "fake-codex",
+                codexHome: "/tmp/call-codex",
+                platformFamily: "unix",
+                platformOs: "macos",
+              },
+            }),
+          );
+          return;
+        }
+
+        if (request.method === "thread/read") {
+          ws.send(
+            JSON.stringify({
+              id: request.id,
+              error: {
+                code: -32000,
+                message: "thread unavailable",
+              },
+            }),
+          );
+        }
+      },
+    },
+  });
+
+  return { server, calls };
+}
+
 describe("CALL-CODEX scaffold tools", () => {
   test("exposes the pro v1 call surface", () => {
     expect(toolDefinitions.map((tool) => tool.name)).toEqual([
@@ -367,6 +417,61 @@ describe("CALL-CODEX scaffold tools", () => {
       ]);
     } finally {
       server.stop(true);
+    }
+  });
+
+  test("call_transcript falls back to cached worker output", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const live = fakeControlAppServer();
+    upsertRuntime({
+      url: `ws://127.0.0.1:${live.server.port}`,
+      pid: process.pid,
+      status: "running",
+    });
+
+    let callId = "";
+    try {
+      const created = await handleToolCall("call_create", {
+        title: "Cached transcript call",
+        workers: [{ name: "cache", role: "worker", brief: "keep receipts" }],
+      });
+      callId = "call" in created && created.call ? created.call.id : "";
+      setParticipantThreadId({
+        callId,
+        name: "cache",
+        threadId: "thread-control",
+      });
+      await handleToolCall("call_transcript", { call_id: callId });
+    } finally {
+      live.server.stop(true);
+    }
+
+    const failing = fakeFailingReadAppServer();
+    upsertRuntime({
+      url: `ws://127.0.0.1:${failing.server.port}`,
+      pid: process.pid,
+      status: "running",
+    });
+
+    try {
+      const transcript = await handleToolCall("call_transcript", {
+        call_id: callId,
+      });
+
+      expect(transcript.ok).toBe(true);
+      expect(
+        "transcript" in transcript
+          ? transcript.transcript?.includes(
+              "Mission complete. The line is clear.",
+            )
+          : false,
+      ).toBe(true);
+      expect(failing.calls.map((call) => call.method)).toEqual([
+        "initialize",
+        "thread/read",
+      ]);
+    } finally {
+      failing.server.stop(true);
     }
   });
 });

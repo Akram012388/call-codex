@@ -62,6 +62,22 @@ export type MessageRow = {
   created_at: string;
 };
 
+export type WorkerTranscriptItemRow = {
+  id: number;
+  call_id: string;
+  participant: string;
+  thread_id: string;
+  turn_id: string;
+  turn_status: string;
+  turn_started_at: number | null;
+  turn_completed_at: number | null;
+  turn_duration_ms: number | null;
+  item_index: number;
+  item_type: string;
+  item_text: string;
+  imported_at: string;
+};
+
 const DEFAULT_DB_PATH = join(homedir(), ".codex", "call-codex", "bus.db");
 
 let db: Database | null = null;
@@ -184,6 +200,25 @@ function migrate(database: Database) {
       event_type TEXT NOT NULL,
       payload_json TEXT NOT NULL DEFAULT '{}',
       created_at TEXT NOT NULL
+    );
+  `);
+
+  database.run(`
+    CREATE TABLE IF NOT EXISTS worker_transcript_items (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      call_id TEXT NOT NULL REFERENCES calls(id) ON DELETE CASCADE,
+      participant TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      turn_id TEXT NOT NULL,
+      turn_status TEXT NOT NULL,
+      turn_started_at INTEGER,
+      turn_completed_at INTEGER,
+      turn_duration_ms INTEGER,
+      item_index INTEGER NOT NULL,
+      item_type TEXT NOT NULL,
+      item_text TEXT NOT NULL,
+      imported_at TEXT NOT NULL,
+      UNIQUE(call_id, participant, turn_id, item_index)
     );
   `);
 }
@@ -559,6 +594,74 @@ export function addEvent(
   );
 }
 
+export function upsertWorkerTranscriptItems(input: {
+  callId: string;
+  participant: string;
+  threadId: string;
+  turns: WorkerTranscriptSection["turns"];
+}) {
+  const stamp = now();
+  const database = getDb();
+  let imported = 0;
+
+  database.transaction(() => {
+    for (const turn of input.turns) {
+      turn.entries.forEach((entry, index) => {
+        database.run(
+          `INSERT INTO worker_transcript_items
+           (call_id, participant, thread_id, turn_id, turn_status, turn_started_at,
+            turn_completed_at, turn_duration_ms, item_index, item_type, item_text, imported_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+           ON CONFLICT(call_id, participant, turn_id, item_index) DO UPDATE SET
+             thread_id = excluded.thread_id,
+             turn_status = excluded.turn_status,
+             turn_started_at = excluded.turn_started_at,
+             turn_completed_at = excluded.turn_completed_at,
+             turn_duration_ms = excluded.turn_duration_ms,
+             item_type = excluded.item_type,
+             item_text = excluded.item_text,
+             imported_at = excluded.imported_at`,
+          [
+            input.callId,
+            input.participant,
+            input.threadId,
+            turn.id,
+            turn.status,
+            turn.started_at,
+            turn.completed_at,
+            turn.duration_ms,
+            index,
+            entry.type,
+            entry.text,
+            stamp,
+          ],
+        );
+        imported += 1;
+      });
+    }
+  })();
+
+  if (imported > 0) {
+    addEvent(input.callId, "worker_transcript.imported", {
+      participant: input.participant,
+      thread_id: input.threadId,
+      item_count: imported,
+    });
+  }
+
+  return imported;
+}
+
+export function listWorkerTranscriptItems(callId: string) {
+  return getDb()
+    .query<WorkerTranscriptItemRow, [string]>(
+      `SELECT * FROM worker_transcript_items
+       WHERE call_id = ?
+       ORDER BY participant ASC, turn_started_at ASC, turn_id ASC, item_index ASC`,
+    )
+    .all(callId);
+}
+
 export type WorkerTranscriptSection = {
   participant: string;
   thread_id: string;
@@ -575,6 +678,46 @@ export type WorkerTranscriptSection = {
   }>;
   error?: string;
 };
+
+export function buildWorkerTranscriptSectionsFromCache(
+  callId: string,
+): WorkerTranscriptSection[] {
+  const rows = listWorkerTranscriptItems(callId);
+  const sections = new Map<string, WorkerTranscriptSection>();
+
+  for (const row of rows) {
+    const sectionKey = `${row.participant}\u0000${row.thread_id}`;
+    let section = sections.get(sectionKey);
+    if (!section) {
+      section = {
+        participant: row.participant,
+        thread_id: row.thread_id,
+        turns: [],
+      };
+      sections.set(sectionKey, section);
+    }
+
+    let turn = section.turns.find((item) => item.id === row.turn_id);
+    if (!turn) {
+      turn = {
+        id: row.turn_id,
+        status: row.turn_status,
+        started_at: row.turn_started_at,
+        completed_at: row.turn_completed_at,
+        duration_ms: row.turn_duration_ms,
+        entries: [],
+      };
+      section.turns.push(turn);
+    }
+
+    turn.entries.push({
+      type: row.item_type,
+      text: row.item_text,
+    });
+  }
+
+  return [...sections.values()];
+}
 
 export function buildTranscript(
   callId: string,

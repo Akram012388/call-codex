@@ -1,6 +1,7 @@
 import { z } from "zod";
 import {
   addMessage,
+  buildWorkerTranscriptSectionsFromCache,
   buildTranscript,
   createCall,
   getCallBundle,
@@ -16,6 +17,7 @@ import {
   setParticipantActiveTurn,
   setParticipantThreadId,
   updateCall,
+  upsertWorkerTranscriptItems,
 } from "./bus";
 import { bootManagedAppServer } from "./app-server/manager";
 import {
@@ -642,6 +644,7 @@ function transcriptEntries(items: ThreadItem[]) {
 }
 
 async function importWorkerTranscriptSections(
+  callId: string,
   participants: ParticipantRow[],
 ): Promise<WorkerTranscriptSection[]> {
   const withThreads = participants.filter(
@@ -661,7 +664,7 @@ async function importWorkerTranscriptSections(
           threadId: participant.thread_id,
           includeTurns: true,
         });
-        sections.push({
+        const section = {
           participant: participant.name,
           thread_id: participant.thread_id,
           turns: read.thread.turns.map((turn) => ({
@@ -672,8 +675,25 @@ async function importWorkerTranscriptSections(
             duration_ms: turn.durationMs,
             entries: transcriptEntries(turn.items),
           })),
+        };
+        sections.push(section);
+        upsertWorkerTranscriptItems({
+          callId,
+          participant: participant.name,
+          threadId: participant.thread_id,
+          turns: section.turns,
         });
       } catch (error) {
+        const cached = buildWorkerTranscriptSectionsFromCache(callId).find(
+          (section) =>
+            section.participant === participant.name &&
+            section.thread_id === participant.thread_id,
+        );
+        if (cached) {
+          sections.push(cached);
+          continue;
+        }
+
         sections.push({
           participant: participant.name,
           thread_id: participant.thread_id,
@@ -759,6 +779,22 @@ async function refreshWorkerProgress(input: {
 
         const status = participantStatusForTurn(turn);
         const assistantMessages = latestAssistantText(turn.items);
+        const transcriptTurns = [
+          {
+            id: turn.id,
+            status: turn.status,
+            started_at: turn.startedAt,
+            completed_at: turn.completedAt,
+            duration_ms: turn.durationMs,
+            entries: transcriptEntries(turn.items),
+          },
+        ];
+        upsertWorkerTranscriptItems({
+          callId: input.callId,
+          participant: participant.name,
+          threadId: participant.thread_id,
+          turns: transcriptTurns,
+        });
         const progress = {
           participant: participant.name,
           thread_id: participant.thread_id,
@@ -1346,6 +1382,7 @@ export async function handleToolCall(name: string, args: unknown) {
       const bundle = getCallBundle(parsed.data.call_id, false);
       if (!bundle) return missingCall(name, parsed.data.call_id);
       const workerSections = await importWorkerTranscriptSections(
+        parsed.data.call_id,
         bundle.participants,
       );
       const transcript = buildTranscript(parsed.data.call_id, workerSections);
