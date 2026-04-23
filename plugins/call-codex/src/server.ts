@@ -22,7 +22,7 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
 }));
 
 server.setRequestHandler(CallToolRequestSchema, async (request) => {
-  const result = handleToolCall(request.params.name, request.params.arguments);
+  const result = await handleToolCall(request.params.name, request.params.arguments);
 
   return {
     content: [

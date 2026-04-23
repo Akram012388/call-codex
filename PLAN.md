@@ -397,6 +397,8 @@ Status: scaffolded. The current MCP server exposes scaffold responses for the fu
 - Implement `call_boot`, `call_create`, `call_who`, and `call_status`.
 - Add tests and MCP smoke test.
 
+Status: partially implemented. `call_boot` starts a managed loopback app-server and initializes the SQLite board. The local call board now supports calls, participants, messages, status, updates, close/cancel, and markdown transcripts. Worker thread creation and injection remain in the next app-server slice.
+
 ### Milestone 4: Messaging
 
 - Implement `call_send`, `call_broadcast`, and `call_inbox`.

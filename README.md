@@ -64,9 +64,11 @@ The locked v1 stack is:
 - Codex plugin manifest, skill, and MCP server
 - SQLite via Bun's built-in runtime
 
-The repo-local plugin scaffold now lives under `plugins/call-codex` with a Codex manifest, local marketplace entry, skill, MCP server skeleton, generated app-server protocol types, and starter tests.
+The repo-local plugin scaffold now lives under `plugins/call-codex` with a Codex manifest, local marketplace entry, skill, MCP server, generated app-server protocol types, and starter tests.
 
-The next step is wiring `call_boot` to a managed loopback app-server and adding the SQLite call board.
+`call_boot` can start a managed loopback Codex app-server, and the SQLite call board is wired for local calls, participants, messages, status, and transcripts.
+
+The next step is connecting `call_create` and `call_send` to app-server thread creation and `thread/inject_items`.
 
 ## Spirit
 
