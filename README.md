@@ -54,7 +54,7 @@ Remote app-server setups may come later, but v1 starts on the Mac, close to the 
 
 ## Build Status
 
-This repository is in the initial planning and docs phase.
+This repository is in the initial scaffold phase.
 
 The locked v1 stack is:
 
@@ -64,7 +64,9 @@ The locked v1 stack is:
 - Codex plugin manifest, skill, and MCP server
 - SQLite via Bun's built-in runtime
 
-The next step is scaffolding the plugin under `plugins/call-codex`, wiring a repo-local marketplace, and implementing the first MCP server with `call_boot`, `call_create`, and `call_status`.
+The repo-local plugin scaffold now lives under `plugins/call-codex` with a Codex manifest, local marketplace entry, skill, MCP server skeleton, generated app-server protocol types, and starter tests.
+
+The next step is wiring `call_boot` to a managed loopback app-server and adding the SQLite call board.
 
 ## Spirit
 

@@ -1,0 +1,20 @@
+{
+  "name": "call-codex-local",
+  "interface": {
+    "displayName": "CALL-CODEX Local"
+  },
+  "plugins": [
+    {
+      "name": "call-codex",
+      "source": {
+        "source": "local",
+        "path": "./plugins/call-codex"
+      },
+      "policy": {
+        "installation": "AVAILABLE",
+        "authentication": "ON_INSTALL"
+      },
+      "category": "Productivity"
+    }
+  ]
+}

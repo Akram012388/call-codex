@@ -1,0 +1,23 @@
+{
+  "name": "call-codex-plugin",
+  "version": "0.1.0",
+  "private": true,
+  "description": "MCP server and Codex plugin scaffold for CALL-CODEX.",
+  "type": "module",
+  "scripts": {
+    "start:mcp": "bun install --silent && bun run src/server.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "format": "prettier --write .",
+    "generate:app-server-types": "codex app-server generate-ts --experimental --out src/app-server/generated"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.3.13",
+    "prettier": "^3.8.3",
+    "typescript": "^5.9.3"
+  }
+}

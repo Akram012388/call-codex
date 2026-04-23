@@ -389,6 +389,8 @@ Manual macOS app checks:
 - Add package scripts and TypeScript config.
 - Generate app-server protocol types.
 
+Status: scaffolded. The current MCP server exposes scaffold responses for the full planned `call_*` surface while app-server and SQLite behavior are implemented in the next slices.
+
 ### Milestone 3: Local Call Core
 
 - Implement SQLite schema.

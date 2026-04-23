@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "call-codex": {
+      "command": "bun",
+      "args": [
+        "run",
+        "start:mcp"
+      ],
+      "cwd": ".",
+      "startup_timeout_sec": 30
+    }
+  }
+}

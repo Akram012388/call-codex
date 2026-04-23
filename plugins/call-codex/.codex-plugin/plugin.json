@@ -1,0 +1,43 @@
+{
+  "name": "call-codex",
+  "version": "0.1.0",
+  "description": "Mac-first Codex plugin for app-server-powered calls between Codex threads.",
+  "author": {
+    "name": "Shaikh Akram Ahmed",
+    "url": "https://github.com/Akram012388"
+  },
+  "homepage": "https://github.com/Akram012388/call-codex",
+  "repository": "https://github.com/Akram012388/call-codex",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "app-server",
+    "mcp",
+    "multi-thread",
+    "agent-coordination",
+    "macos"
+  ],
+  "skills": "./skills/",
+  "mcpServers": "./.mcp.json",
+  "interface": {
+    "displayName": "CALL-CODEX",
+    "shortDescription": "Open app-server calls between Codex threads",
+    "longDescription": "CALL-CODEX is a macOS-first Codex plugin for super-user multi-thread calls. A main thread can boot a local app-server, create worker threads, send targeted messages, track status, and preserve a local transcript.",
+    "developerName": "Shaikh Akram Ahmed",
+    "category": "Productivity",
+    "capabilities": [
+      "Interactive",
+      "Write",
+      "MCP",
+      "Local"
+    ],
+    "websiteURL": "https://github.com/Akram012388/call-codex",
+    "brandColor": "#10A37F",
+    "defaultPrompt": [
+      "Call Codex and spin up workers for this repo.",
+      "Open a call with backend, tests, and reviewer.",
+      "Show call status and who is on the line."
+    ],
+    "screenshots": []
+  }
+}
