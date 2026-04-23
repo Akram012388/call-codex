@@ -13,7 +13,14 @@ export type RuntimeState = {
 };
 
 export type CallStatus = "open" | "cancelled" | "closed";
-export type ParticipantStatus = "queued" | "running" | "blocked" | "done" | "failed" | "cancelled" | "closed";
+export type ParticipantStatus =
+  | "queued"
+  | "running"
+  | "blocked"
+  | "done"
+  | "failed"
+  | "cancelled"
+  | "closed";
 
 export type CallRow = {
   id: string;
@@ -161,7 +168,11 @@ function migrate(database: Database) {
   `);
 }
 
-export function upsertRuntime(input: { url: string; pid?: number | null; status: string }) {
+export function upsertRuntime(input: {
+  url: string;
+  pid?: number | null;
+  status: string;
+}) {
   const database = getDb();
   const stamp = now();
   database.run(
@@ -172,13 +183,18 @@ export function upsertRuntime(input: { url: string; pid?: number | null; status:
        pid = excluded.pid,
        status = excluded.status,
        last_seen = excluded.last_seen`,
-    [input.url, input.pid ?? null, input.status, stamp, stamp]
+    [input.url, input.pid ?? null, input.status, stamp, stamp],
   );
   return getRuntime();
 }
 
 export function getRuntime(): RuntimeState | null {
-  return getDb().query<RuntimeState, []>("SELECT * FROM runtime WHERE id = 'managed-app-server'").get();
+  return getDb()
+    .query<
+      RuntimeState,
+      []
+    >("SELECT * FROM runtime WHERE id = 'managed-app-server'")
+    .get();
 }
 
 export function createCall(input: {
@@ -197,7 +213,7 @@ export function createCall(input: {
     database.run(
       `INSERT INTO calls (id, title, project, mode, status, summary, created_at)
        VALUES (?, ?, ?, ?, 'open', '', ?)`,
-      [callId, input.title, input.project ?? "", mode, stamp]
+      [callId, input.title, input.project ?? "", mode, stamp],
     );
 
     for (const worker of input.workers) {
@@ -214,39 +230,86 @@ export function createCall(input: {
           input.cwd ?? "",
           worker.brief,
           stamp,
-          stamp
-        ]
+          stamp,
+        ],
       );
     }
 
-    addEvent(callId, "call.created", { title: input.title, mode, worker_count: input.workers.length });
+    addEvent(callId, "call.created", {
+      title: input.title,
+      mode,
+      worker_count: input.workers.length,
+    });
   })();
 
   return getCallBundle(callId);
 }
 
 export function getCall(callId: string) {
-  return getDb().query<CallRow, [string]>("SELECT * FROM calls WHERE id = ?").get(callId);
+  return getDb()
+    .query<CallRow, [string]>("SELECT * FROM calls WHERE id = ?")
+    .get(callId);
 }
 
 export function listCalls(filters: { project?: string } = {}) {
   if (filters.project) {
     return getDb()
-      .query<CallRow, [string]>("SELECT * FROM calls WHERE project = ? ORDER BY created_at DESC")
+      .query<
+        CallRow,
+        [string]
+      >("SELECT * FROM calls WHERE project = ? ORDER BY created_at DESC")
       .all(filters.project);
   }
 
-  return getDb().query<CallRow, []>("SELECT * FROM calls ORDER BY created_at DESC").all();
+  return getDb()
+    .query<CallRow, []>("SELECT * FROM calls ORDER BY created_at DESC")
+    .all();
 }
 
 export function listParticipants(input: { callId?: string } = {}) {
   if (input.callId) {
     return getDb()
-      .query<ParticipantRow, [string]>("SELECT * FROM participants WHERE call_id = ? ORDER BY created_at ASC")
+      .query<
+        ParticipantRow,
+        [string]
+      >("SELECT * FROM participants WHERE call_id = ? ORDER BY created_at ASC")
       .all(input.callId);
   }
 
-  return getDb().query<ParticipantRow, []>("SELECT * FROM participants ORDER BY created_at ASC").all();
+  return getDb()
+    .query<
+      ParticipantRow,
+      []
+    >("SELECT * FROM participants ORDER BY created_at ASC")
+    .all();
+}
+
+export function getParticipant(input: { callId: string; name: string }) {
+  return getDb()
+    .query<
+      ParticipantRow,
+      [string, string]
+    >("SELECT * FROM participants WHERE call_id = ? AND name = ?")
+    .get(input.callId, input.name);
+}
+
+export function setParticipantThreadId(input: {
+  callId: string;
+  name: string;
+  threadId: string;
+}) {
+  const stamp = now();
+  getDb().run(
+    `UPDATE participants
+     SET thread_id = ?, status = 'running', last_seen = ?
+     WHERE call_id = ? AND name = ?`,
+    [input.threadId, stamp, input.callId, input.name],
+  );
+  addEvent(input.callId, "participant.thread_linked", {
+    name: input.name,
+    thread_id: input.threadId,
+  });
+  return getParticipant({ callId: input.callId, name: input.name });
 }
 
 export function getCallBundle(callId: string, includeRecentMessages = true) {
@@ -256,7 +319,9 @@ export function getCallBundle(callId: string, includeRecentMessages = true) {
   return {
     call,
     participants: listParticipants({ callId }),
-    recent_messages: includeRecentMessages ? listMessages({ callId, limit: 20 }) : []
+    recent_messages: includeRecentMessages
+      ? listMessages({ callId, limit: 20 })
+      : [],
   };
 }
 
@@ -279,22 +344,42 @@ export function addMessage(input: {
       input.content,
       input.messageType ?? "note",
       input.priority ?? "normal",
-      stamp
-    ]
+      stamp,
+    ],
   );
   addEvent(input.callId, "message.created", {
     from: input.fromName,
     to: input.toName,
-    message_id: Number(result.lastInsertRowid)
+    message_id: Number(result.lastInsertRowid),
   });
   return getMessage(Number(result.lastInsertRowid));
 }
 
 export function getMessage(id: number) {
-  return getDb().query<MessageRow, [number]>("SELECT * FROM messages WHERE id = ?").get(id);
+  return getDb()
+    .query<MessageRow, [number]>("SELECT * FROM messages WHERE id = ?")
+    .get(id);
 }
 
-export function listMessages(input: { callId?: string; participant?: string; limit?: number }) {
+export function markMessageInjected(id: number) {
+  const stamp = now();
+  getDb().run("UPDATE messages SET injected_at = ? WHERE id = ?", [stamp, id]);
+  const message = getMessage(id);
+  if (message) {
+    addEvent(message.call_id, "message.injected", {
+      message_id: id,
+      to: message.to_name,
+      injected_at: stamp,
+    });
+  }
+  return message;
+}
+
+export function listMessages(input: {
+  callId?: string;
+  participant?: string;
+  limit?: number;
+}) {
   const limit = Math.min(Math.max(input.limit ?? 20, 1), 100);
 
   if (input.callId && input.participant) {
@@ -302,14 +387,17 @@ export function listMessages(input: { callId?: string; participant?: string; lim
       .query<MessageRow, [string, string, string, number]>(
         `SELECT * FROM messages
          WHERE call_id = ? AND (to_name = ? OR from_name = ?)
-         ORDER BY created_at DESC LIMIT ?`
+         ORDER BY created_at DESC LIMIT ?`,
       )
       .all(input.callId, input.participant, input.participant, limit);
   }
 
   if (input.callId) {
     return getDb()
-      .query<MessageRow, [string, number]>("SELECT * FROM messages WHERE call_id = ? ORDER BY created_at DESC LIMIT ?")
+      .query<
+        MessageRow,
+        [string, number]
+      >("SELECT * FROM messages WHERE call_id = ? ORDER BY created_at DESC LIMIT ?")
       .all(input.callId, limit);
   }
 
@@ -318,12 +406,17 @@ export function listMessages(input: { callId?: string; participant?: string; lim
       .query<MessageRow, [string, string, number]>(
         `SELECT * FROM messages
          WHERE to_name = ? OR from_name = ?
-         ORDER BY created_at DESC LIMIT ?`
+         ORDER BY created_at DESC LIMIT ?`,
       )
       .all(input.participant, input.participant, limit);
   }
 
-  return getDb().query<MessageRow, [number]>("SELECT * FROM messages ORDER BY created_at DESC LIMIT ?").all(limit);
+  return getDb()
+    .query<
+      MessageRow,
+      [number]
+    >("SELECT * FROM messages ORDER BY created_at DESC LIMIT ?")
+    .all(limit);
 }
 
 export function updateCall(input: {
@@ -335,46 +428,58 @@ export function updateCall(input: {
 }) {
   const database = getDb();
   const stamp = now();
-  const currentTask = input.blocker ? `Blocked: ${input.blocker}` : input.summary ?? "";
+  const currentTask = input.blocker
+    ? `Blocked: ${input.blocker}`
+    : (input.summary ?? "");
 
   if (input.participant) {
     database.run(
       `UPDATE participants
        SET status = ?, current_task = COALESCE(NULLIF(?, ''), current_task), last_seen = ?
        WHERE call_id = ? AND name = ?`,
-      [input.status, currentTask, stamp, input.callId, input.participant]
+      [input.status, currentTask, stamp, input.callId, input.participant],
     );
   }
 
   if (!input.participant || input.summary) {
-    database.run("UPDATE calls SET summary = COALESCE(?, summary) WHERE id = ?", [input.summary ?? null, input.callId]);
+    database.run(
+      "UPDATE calls SET summary = COALESCE(?, summary) WHERE id = ?",
+      [input.summary ?? null, input.callId],
+    );
   }
 
   addEvent(input.callId, "call.updated", input);
   return getCallBundle(input.callId);
 }
 
-export function setCallStatus(callId: string, status: CallStatus, summary?: string) {
+export function setCallStatus(
+  callId: string,
+  status: CallStatus,
+  summary?: string,
+) {
   const stamp = now();
   const closedAt = status === "closed" || status === "cancelled" ? stamp : null;
-  getDb().run("UPDATE calls SET status = ?, summary = COALESCE(?, summary), closed_at = ? WHERE id = ?", [
-    status,
-    summary ?? null,
-    closedAt,
-    callId
+  getDb().run(
+    "UPDATE calls SET status = ?, summary = COALESCE(?, summary), closed_at = ? WHERE id = ?",
+    [status, summary ?? null, closedAt, callId],
+  );
+  getDb().run("UPDATE participants SET status = ? WHERE call_id = ?", [
+    status === "closed" ? "closed" : "cancelled",
+    callId,
   ]);
-  getDb().run("UPDATE participants SET status = ? WHERE call_id = ?", [status === "closed" ? "closed" : "cancelled", callId]);
   addEvent(callId, `call.${status}`, { summary: summary ?? "" });
   return getCallBundle(callId);
 }
 
-export function addEvent(callId: string | null, eventType: string, payload: unknown) {
-  getDb().run("INSERT INTO events (call_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?)", [
-    callId,
-    eventType,
-    JSON.stringify(payload),
-    now()
-  ]);
+export function addEvent(
+  callId: string | null,
+  eventType: string,
+  payload: unknown,
+) {
+  getDb().run(
+    "INSERT INTO events (call_id, event_type, payload_json, created_at) VALUES (?, ?, ?, ?)",
+    [callId, eventType, JSON.stringify(payload), now()],
+  );
 }
 
 export function buildTranscript(callId: string) {
@@ -392,14 +497,20 @@ export function buildTranscript(callId: string) {
     "",
     "## Participants",
     "",
-    ...bundle.participants.map((participant) => `- ${participant.name} (${participant.role}) - ${participant.status}`),
+    ...bundle.participants.map(
+      (participant) =>
+        `- ${participant.name} (${participant.role}) - ${participant.status}`,
+    ),
     "",
     "## Messages",
     "",
     ...messages
       .slice()
       .reverse()
-      .map((message) => `- ${message.created_at} ${message.from_name} -> ${message.to_name}: ${message.content}`)
+      .map(
+        (message) =>
+          `- ${message.created_at} ${message.from_name} -> ${message.to_name}: ${message.content}`,
+      ),
   ];
 
   return lines.join("\n");

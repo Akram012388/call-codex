@@ -11,7 +11,7 @@ CALL-CODEX lets Codex coordinate Codex through app-server calls. Treat the macOS
 
 - Use `call_boot` before any other CALL-CODEX action.
 - Use `call_create` to open a named call and create workers.
-- Prefer `mode: "fork"` unless the user asks for clean fresh workers.
+- Prefer `mode: "fork"` when the current main thread ID is available; use `mode: "fresh"` for clean workers or when no main thread ID is available.
 - Use `call_send` for one worker and `call_broadcast` for everyone on the line.
 - Use `call_status` before summarizing progress.
 - Use `call_close` when the call is done.

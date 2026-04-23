@@ -389,7 +389,7 @@ Manual macOS app checks:
 - Add package scripts and TypeScript config.
 - Generate app-server protocol types.
 
-Status: scaffolded. The current MCP server exposes scaffold responses for the full planned `call_*` surface while app-server and SQLite behavior are implemented in the next slices.
+Status: scaffolded and now backed by the local runtime slices. The MCP server exposes the full planned `call_*` surface, with SQLite call state, managed app-server boot, real worker thread creation, and message injection underway.
 
 ### Milestone 3: Local Call Core
 
@@ -397,13 +397,15 @@ Status: scaffolded. The current MCP server exposes scaffold responses for the fu
 - Implement `call_boot`, `call_create`, `call_who`, and `call_status`.
 - Add tests and MCP smoke test.
 
-Status: partially implemented. `call_boot` starts a managed loopback app-server and initializes the SQLite board. The local call board now supports calls, participants, messages, status, updates, close/cancel, and markdown transcripts. Worker thread creation and injection remain in the next app-server slice.
+Status: implemented for the local call core. `call_boot` starts a managed loopback app-server and initializes the SQLite board. The call board supports calls, participants, messages, status, updates, close/cancel, and markdown transcripts.
 
 ### Milestone 4: Messaging
 
 - Implement `call_send`, `call_broadcast`, and `call_inbox`.
 - Add app-server injection.
 - Add audit trail and transcript basics.
+
+Status: partially implemented. `call_create` creates real Codex app-server worker threads for `fresh` calls and for `fork` calls when `main_thread_id` is supplied. `call_send` and `call_broadcast` inject messages through `thread/inject_items` when workers have thread IDs; otherwise messages remain queued on the auditable local board.
 
 ### Milestone 5: Control And Polish
 

@@ -54,7 +54,7 @@ Remote app-server setups may come later, but v1 starts on the Mac, close to the 
 
 ## Build Status
 
-This repository is in the initial scaffold phase.
+This repository is in the early build phase.
 
 The locked v1 stack is:
 
@@ -68,7 +68,9 @@ The repo-local plugin scaffold now lives under `plugins/call-codex` with a Codex
 
 `call_boot` can start a managed loopback Codex app-server, and the SQLite call board is wired for local calls, participants, messages, status, and transcripts.
 
-The next step is connecting `call_create` and `call_send` to app-server thread creation and `thread/inject_items`.
+`call_create` now creates real Codex app-server worker threads for `fresh` calls, or for `fork` calls when `main_thread_id` is provided. `call_send` and `call_broadcast` inject call-line messages into workers with `thread/inject_items` when a participant has a thread ID.
+
+The next step is worker wake/control: explicit `turn/start`, `turn/steer`, and `turn/interrupt` flows so calls can move from parked threads to active missions on purpose.
 
 ## Spirit
 
