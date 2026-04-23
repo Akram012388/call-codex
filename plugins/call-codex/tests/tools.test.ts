@@ -1,8 +1,84 @@
 import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { resetDbForTests } from "../src/bus";
+import {
+  resetDbForTests,
+  setParticipantThreadId,
+  upsertRuntime,
+} from "../src/bus";
 import { handleToolCall, toolDefinitions } from "../src/tools";
+
+function fakeControlAppServer() {
+  const calls: Array<{ method: string; params: unknown }> = [];
+  const server = Bun.serve({
+    port: 0,
+    fetch(request, server) {
+      if (server.upgrade(request)) return;
+      return new Response("CALL-CODEX fake control app-server");
+    },
+    websocket: {
+      message(ws, message) {
+        const request = JSON.parse(String(message)) as {
+          id: number;
+          method: string;
+          params: unknown;
+        };
+        calls.push({ method: request.method, params: request.params });
+
+        if (request.method === "initialize") {
+          ws.send(
+            JSON.stringify({
+              id: request.id,
+              result: {
+                userAgent: "fake-codex",
+                codexHome: "/tmp/call-codex",
+                platformFamily: "unix",
+                platformOs: "macos",
+              },
+            }),
+          );
+          return;
+        }
+
+        if (request.method === "turn/start") {
+          ws.send(
+            JSON.stringify({
+              id: request.id,
+              result: {
+                turn: {
+                  id: "turn-control",
+                  items: [],
+                  status: "inProgress",
+                  error: null,
+                  startedAt: 1,
+                  completedAt: null,
+                  durationMs: null,
+                },
+              },
+            }),
+          );
+          return;
+        }
+
+        if (request.method === "turn/steer") {
+          ws.send(
+            JSON.stringify({
+              id: request.id,
+              result: { turnId: "turn-control" },
+            }),
+          );
+          return;
+        }
+
+        if (request.method === "turn/interrupt") {
+          ws.send(JSON.stringify({ id: request.id, result: {} }));
+        }
+      },
+    },
+  });
+
+  return { server, calls };
+}
 
 describe("CALL-CODEX scaffold tools", () => {
   test("exposes the pro v1 call surface", () => {
@@ -12,12 +88,15 @@ describe("CALL-CODEX scaffold tools", () => {
       "call_send",
       "call_broadcast",
       "call_inbox",
+      "call_wake",
+      "call_steer",
+      "call_interrupt",
       "call_who",
       "call_update",
       "call_status",
       "call_cancel",
       "call_close",
-      "call_transcript"
+      "call_transcript",
     ]);
   });
 
@@ -25,7 +104,7 @@ describe("CALL-CODEX scaffold tools", () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
     const result = await handleToolCall("call_create", {
       title: "Test call",
-      workers: [{ name: "tests", role: "worker", brief: "check the line" }]
+      workers: [{ name: "tests", role: "worker", brief: "check the line" }],
     });
 
     expect(result.ok).toBe(true);
@@ -37,21 +116,91 @@ describe("CALL-CODEX scaffold tools", () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
     const created = await handleToolCall("call_create", {
       title: "Transcript call",
-      workers: [{ name: "reviewer", role: "reviewer", brief: "watch the diff" }]
+      workers: [
+        { name: "reviewer", role: "reviewer", brief: "watch the diff" },
+      ],
     });
     const callId = "call" in created && created.call ? created.call.id : "";
 
     const sent = await handleToolCall("call_send", {
       call_id: callId,
       to: "reviewer",
-      content: "Please review the local call board."
+      content: "Please review the local call board.",
     });
     const status = await handleToolCall("call_status", { call_id: callId });
-    const transcript = await handleToolCall("call_transcript", { call_id: callId });
+    const transcript = await handleToolCall("call_transcript", {
+      call_id: callId,
+    });
 
     expect(sent.ok).toBe(true);
     expect(status.ok).toBe(true);
-    expect("recent_messages" in status ? (status.recent_messages?.length ?? 0) : 0).toBe(1);
-    expect("transcript" in transcript ? (transcript.transcript?.includes("Please review") ?? false) : false).toBe(true);
+    expect(
+      "recent_messages" in status ? (status.recent_messages?.length ?? 0) : 0,
+    ).toBe(1);
+    expect(
+      "transcript" in transcript
+        ? (transcript.transcript?.includes("Please review") ?? false)
+        : false,
+    ).toBe(true);
+  });
+
+  test("wakes, steers, and interrupts an active worker turn", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const { server, calls } = fakeControlAppServer();
+    upsertRuntime({
+      url: `ws://127.0.0.1:${server.port}`,
+      pid: process.pid,
+      status: "running",
+    });
+
+    try {
+      const created = await handleToolCall("call_create", {
+        title: "Control call",
+        workers: [
+          { name: "pilot", role: "worker", brief: "fly the active turn" },
+        ],
+      });
+      const callId = "call" in created && created.call ? created.call.id : "";
+      setParticipantThreadId({
+        callId,
+        name: "pilot",
+        threadId: "thread-control",
+      });
+
+      const wake = await handleToolCall("call_wake", {
+        call_id: callId,
+        participant: "pilot",
+        prompt: "Start the mission.",
+      });
+      const steer = await handleToolCall("call_steer", {
+        call_id: callId,
+        participant: "pilot",
+        content: "Adjust the mission.",
+      });
+      const interrupt = await handleToolCall("call_interrupt", {
+        call_id: callId,
+        participant: "pilot",
+        reason: "Test brake.",
+      });
+
+      expect(wake.ok).toBe(true);
+      expect("status" in wake ? wake.status : undefined).toBe("wake_started");
+      expect(steer.ok).toBe(true);
+      expect("status" in steer ? steer.status : undefined).toBe("steered");
+      expect(interrupt.ok).toBe(true);
+      expect("status" in interrupt ? interrupt.status : undefined).toBe(
+        "interrupted",
+      );
+      expect(calls.map((call) => call.method)).toEqual([
+        "initialize",
+        "turn/start",
+        "initialize",
+        "turn/steer",
+        "initialize",
+        "turn/interrupt",
+      ]);
+    } finally {
+      server.stop(true);
+    }
   });
 });

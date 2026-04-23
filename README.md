@@ -31,6 +31,9 @@ The public surface is intentionally playful and sharp:
 - `call_send` - send a task, question, status, or review note to one worker.
 - `call_broadcast` - ring everyone in the call.
 - `call_inbox` - read the messages waiting for this participant.
+- `call_wake` - start active worker turns on purpose.
+- `call_steer` - steer an active worker turn.
+- `call_interrupt` - stop one worker turn, or pull the brake on the whole call.
 - `call_who` - see who is on the line.
 - `call_update` - update task or call state.
 - `call_status` - show progress, blockers, and recent traffic.
@@ -70,7 +73,9 @@ The repo-local plugin scaffold now lives under `plugins/call-codex` with a Codex
 
 `call_create` now creates real Codex app-server worker threads for `fresh` calls, or for `fork` calls when `main_thread_id` is provided. `call_send` and `call_broadcast` inject call-line messages into workers with `thread/inject_items` when a participant has a thread ID.
 
-The next step is worker wake/control: explicit `turn/start`, `turn/steer`, and `turn/interrupt` flows so calls can move from parked threads to active missions on purpose.
+`call_wake`, `call_steer`, and `call_interrupt` now move workers from parked threads into active missions through `turn/start`, `turn/steer`, and `turn/interrupt`, with active turn IDs tracked on the local board.
+
+The next step is richer lifecycle polish: reading worker turn events, clearing completed turns automatically, and showing live worker progress in `call_status`.
 
 ## Spirit
 

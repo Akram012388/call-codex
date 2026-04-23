@@ -1,5 +1,9 @@
 import { describe, expect, test } from "bun:test";
-import { AppServerClient, userMessageItem } from "../src/app-server/client";
+import {
+  AppServerClient,
+  textUserInput,
+  userMessageItem,
+} from "../src/app-server/client";
 
 function fakeAppServer() {
   const calls: Array<{ method: string; params: unknown }> = [];
@@ -64,6 +68,38 @@ function fakeAppServer() {
 
         if (request.method === "thread/inject_items") {
           ws.send(JSON.stringify({ id: request.id, result: {} }));
+          return;
+        }
+
+        if (request.method === "turn/start") {
+          ws.send(
+            JSON.stringify({
+              id: request.id,
+              result: {
+                turn: {
+                  id: "turn-test",
+                  items: [],
+                  status: "inProgress",
+                  error: null,
+                  startedAt: 1,
+                  completedAt: null,
+                  durationMs: null,
+                },
+              },
+            }),
+          );
+          return;
+        }
+
+        if (request.method === "turn/steer") {
+          ws.send(
+            JSON.stringify({ id: request.id, result: { turnId: "turn-test" } }),
+          );
+          return;
+        }
+
+        if (request.method === "turn/interrupt") {
+          ws.send(JSON.stringify({ id: request.id, result: {} }));
         }
       },
     },
@@ -89,12 +125,29 @@ describe("AppServerClient", () => {
         threadId: thread.thread.id,
         items: [userMessageItem("CALL-CODEX ping")],
       });
+      const turn = await client.startTurn({
+        threadId: thread.thread.id,
+        input: [textUserInput("Wake up")],
+      });
+      const steered = await client.steerTurn({
+        threadId: thread.thread.id,
+        expectedTurnId: turn.turn.id,
+        input: [textUserInput("Adjust course")],
+      });
+      await client.interruptTurn({
+        threadId: thread.thread.id,
+        turnId: steered.turnId,
+      });
 
       expect(thread.thread.id).toBe("thread-test");
+      expect(turn.turn.id).toBe("turn-test");
       expect(calls.map((call) => call.method)).toEqual([
         "initialize",
         "thread/start",
         "thread/inject_items",
+        "turn/start",
+        "turn/steer",
+        "turn/interrupt",
       ]);
     } finally {
       client.close();

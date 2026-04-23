@@ -11,12 +11,18 @@ import {
   listMessages,
   listParticipants,
   markMessageInjected,
+  clearParticipantActiveTurn,
   setCallStatus,
+  setParticipantActiveTurn,
   setParticipantThreadId,
   updateCall,
 } from "./bus";
 import { bootManagedAppServer } from "./app-server/manager";
-import { AppServerClient, userMessageItem } from "./app-server/client";
+import {
+  AppServerClient,
+  textUserInput,
+  userMessageItem,
+} from "./app-server/client";
 import type { MessageRow, ParticipantRow, RuntimeState } from "./bus";
 
 const prioritySchema = z
@@ -129,6 +135,57 @@ export const toolDefinitions = [
         limit: { type: "number" },
       },
       required: ["participant"],
+    },
+  },
+  {
+    name: "call_wake",
+    description: "Wake one worker or the whole call into an active Codex turn.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        call_id: { type: "string" },
+        participant: {
+          type: "string",
+          description: "Optional worker name. Omit to wake every worker.",
+        },
+        from: { type: "string" },
+        prompt: { type: "string" },
+        cwd: { type: "string" },
+      },
+      required: ["call_id", "prompt"],
+    },
+  },
+  {
+    name: "call_steer",
+    description:
+      "Steer an active worker turn with a follow-up call-line message.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        call_id: { type: "string" },
+        participant: { type: "string" },
+        from: { type: "string" },
+        content: { type: "string" },
+      },
+      required: ["call_id", "participant", "content"],
+    },
+  },
+  {
+    name: "call_interrupt",
+    description:
+      "Interrupt one active worker turn, or every active worker on the call.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        call_id: { type: "string" },
+        participant: {
+          type: "string",
+          description:
+            "Optional worker name. Omit to interrupt every active worker.",
+        },
+        reason: { type: "string" },
+      },
+      required: ["call_id"],
     },
   },
   {
@@ -249,6 +306,27 @@ const inboxSchema = z.object({
   participant: z.string().min(1).max(64),
   call_id: z.string().optional(),
   limit: z.number().int().positive().max(100).default(20),
+});
+
+const wakeSchema = z.object({
+  call_id: z.string().min(1),
+  participant: z.string().min(1).max(64).optional(),
+  from: z.string().min(1).max(64).default("main"),
+  prompt: z.string().min(1).max(20_000),
+  cwd: z.string().optional(),
+});
+
+const steerSchema = z.object({
+  call_id: z.string().min(1),
+  participant: z.string().min(1).max(64),
+  from: z.string().min(1).max(64).default("main"),
+  content: z.string().min(1).max(20_000),
+});
+
+const interruptSchema = z.object({
+  call_id: z.string().min(1),
+  participant: z.string().min(1).max(64).optional(),
+  reason: z.string().max(2_000).optional(),
 });
 
 const whoSchema = z.object({
@@ -414,6 +492,23 @@ function callMessageText(message: MessageRow) {
   ].join("\n");
 }
 
+function turnPromptText(input: {
+  from: string;
+  to: string;
+  prompt: string;
+  action: "wake" | "steer";
+}) {
+  return [
+    input.action === "wake"
+      ? "CALL-CODEX wake call"
+      : "CALL-CODEX steering call",
+    `From: ${input.from}`,
+    `To: ${input.to}`,
+    "",
+    input.prompt,
+  ].join("\n");
+}
+
 type InjectionResult =
   | { injected: false; reason: string }
   | { injected: true; thread_id: string; message: MessageRow | null };
@@ -454,6 +549,67 @@ async function injectMessage(
     thread_id: participant.thread_id,
     message: injectedMessage,
   };
+}
+
+function selectParticipants(
+  bundle: NonNullable<ReturnType<typeof getCallBundle>>,
+  participant?: string,
+) {
+  if (participant) {
+    return bundle.participants.filter((item) => item.name === participant);
+  }
+  return bundle.participants;
+}
+
+function missingParticipant(tool: string, callId: string, participant: string) {
+  return {
+    ok: false,
+    tool,
+    error: `No CALL-CODEX participant named ${participant} is on ${callId}`,
+  };
+}
+
+async function interruptActiveParticipants(input: {
+  callId: string;
+  participants: ParticipantRow[];
+  reason?: string;
+}) {
+  const active = input.participants.filter(
+    (participant) => participant.thread_id && participant.active_turn_id,
+  );
+  if (active.length === 0) return [];
+
+  const boot = await bootManagedAppServer();
+  const runtime = requireRuntime(boot.runtime);
+  const client = new AppServerClient(runtime.url);
+  const interrupted = [];
+
+  try {
+    for (const participant of active) {
+      await client.interruptTurn({
+        threadId: participant.thread_id,
+        turnId: participant.active_turn_id,
+      });
+      const updated = clearParticipantActiveTurn({
+        callId: input.callId,
+        name: participant.name,
+        status: "blocked",
+        currentTask: input.reason
+          ? `Interrupted: ${input.reason}`
+          : "Interrupted by CALL-CODEX.",
+      });
+      interrupted.push({
+        participant: participant.name,
+        thread_id: participant.thread_id,
+        turn_id: participant.active_turn_id,
+        status: updated?.status ?? "blocked",
+      });
+    }
+  } finally {
+    client.close();
+  }
+
+  return interrupted;
 }
 
 export async function handleToolCall(name: string, args: unknown) {
@@ -628,6 +784,214 @@ export async function handleToolCall(name: string, args: unknown) {
       };
     }
 
+    case "call_wake": {
+      const parsed = parse(wakeSchema, name, args);
+      if (!parsed.ok) return parsed;
+      const bundle = getCallBundle(parsed.data.call_id, false);
+      if (!bundle) return missingCall(name, parsed.data.call_id);
+      const participants = selectParticipants(bundle, parsed.data.participant);
+      if (parsed.data.participant && participants.length === 0) {
+        return missingParticipant(
+          name,
+          parsed.data.call_id,
+          parsed.data.participant,
+        );
+      }
+
+      const boot = await bootManagedAppServer();
+      const runtime = requireRuntime(boot.runtime);
+      const client = new AppServerClient(runtime.url);
+      const wakeups = [];
+
+      try {
+        for (const participant of participants) {
+          if (!participant.thread_id) {
+            wakeups.push({
+              participant: participant.name,
+              started: false,
+              reason:
+                "Worker has no Codex thread yet. Use fresh mode or provide main_thread_id for fork mode.",
+            });
+            continue;
+          }
+
+          if (participant.active_turn_id) {
+            wakeups.push({
+              participant: participant.name,
+              started: false,
+              thread_id: participant.thread_id,
+              active_turn_id: participant.active_turn_id,
+              reason:
+                "Worker already has an active turn. Use call_steer or call_interrupt.",
+            });
+            continue;
+          }
+
+          const prompt = turnPromptText({
+            from: parsed.data.from,
+            to: participant.name,
+            prompt: parsed.data.prompt,
+            action: "wake",
+          });
+          const message = addMessage({
+            callId: parsed.data.call_id,
+            fromName: parsed.data.from,
+            toName: participant.name,
+            content: parsed.data.prompt,
+            messageType: "task",
+            priority: "normal",
+          });
+          const turn = await client.startTurn({
+            threadId: participant.thread_id,
+            input: [textUserInput(prompt)],
+            cwd: (parsed.data.cwd ?? participant.cwd) || undefined,
+          });
+          if (message) markMessageInjected(message.id);
+          const updated = setParticipantActiveTurn({
+            callId: parsed.data.call_id,
+            name: participant.name,
+            turnId: turn.turn.id,
+            currentTask: parsed.data.prompt,
+          });
+          wakeups.push({
+            participant: participant.name,
+            started: true,
+            thread_id: participant.thread_id,
+            turn_id: turn.turn.id,
+            status: updated?.status ?? "running",
+          });
+        }
+      } finally {
+        client.close();
+      }
+
+      return {
+        ok: true,
+        tool: name,
+        status: wakeups.some((item) => item.started)
+          ? "wake_started"
+          : "wake_queued",
+        wakeups,
+        ...getCallBundle(parsed.data.call_id),
+      };
+    }
+
+    case "call_steer": {
+      const parsed = parse(steerSchema, name, args);
+      if (!parsed.ok) return parsed;
+      const bundle = getCallBundle(parsed.data.call_id, false);
+      if (!bundle) return missingCall(name, parsed.data.call_id);
+      const participant = getParticipant({
+        callId: parsed.data.call_id,
+        name: parsed.data.participant,
+      });
+      if (!participant) {
+        return missingParticipant(
+          name,
+          parsed.data.call_id,
+          parsed.data.participant,
+        );
+      }
+      if (!participant.thread_id) {
+        return {
+          ok: false,
+          tool: name,
+          error: `${participant.name} has no Codex thread yet.`,
+        };
+      }
+      if (!participant.active_turn_id) {
+        return {
+          ok: false,
+          tool: name,
+          error: `${participant.name} has no active turn. Use call_wake first.`,
+        };
+      }
+
+      const boot = await bootManagedAppServer();
+      const runtime = requireRuntime(boot.runtime);
+      const client = new AppServerClient(runtime.url);
+      const message = addMessage({
+        callId: parsed.data.call_id,
+        fromName: parsed.data.from,
+        toName: participant.name,
+        content: parsed.data.content,
+        messageType: "task",
+        priority: "normal",
+      });
+      try {
+        const steer = await client.steerTurn({
+          threadId: participant.thread_id,
+          expectedTurnId: participant.active_turn_id,
+          input: [
+            textUserInput(
+              turnPromptText({
+                from: parsed.data.from,
+                to: participant.name,
+                prompt: parsed.data.content,
+                action: "steer",
+              }),
+            ),
+          ],
+        });
+        if (message) markMessageInjected(message.id);
+        setParticipantActiveTurn({
+          callId: parsed.data.call_id,
+          name: participant.name,
+          turnId: steer.turnId,
+          currentTask: parsed.data.content,
+        });
+        return {
+          ok: true,
+          tool: name,
+          status: "steered",
+          participant: participant.name,
+          thread_id: participant.thread_id,
+          turn_id: steer.turnId,
+          ...getCallBundle(parsed.data.call_id),
+        };
+      } finally {
+        client.close();
+      }
+    }
+
+    case "call_interrupt": {
+      const parsed = parse(interruptSchema, name, args);
+      if (!parsed.ok) return parsed;
+      const bundle = getCallBundle(parsed.data.call_id, false);
+      if (!bundle) return missingCall(name, parsed.data.call_id);
+      const participants = selectParticipants(bundle, parsed.data.participant);
+      if (parsed.data.participant && participants.length === 0) {
+        return missingParticipant(
+          name,
+          parsed.data.call_id,
+          parsed.data.participant,
+        );
+      }
+
+      const interrupted = await interruptActiveParticipants({
+        callId: parsed.data.call_id,
+        participants,
+        reason: parsed.data.reason,
+      });
+      if (interrupted.length === 0) {
+        return {
+          ok: true,
+          tool: name,
+          status: "nothing_to_interrupt",
+          message: "No active worker turns are currently on the line.",
+          ...getCallBundle(parsed.data.call_id),
+        };
+      }
+
+      return {
+        ok: true,
+        tool: name,
+        status: "interrupted",
+        interrupted,
+        ...getCallBundle(parsed.data.call_id),
+      };
+    }
+
     case "call_who": {
       const parsed = parse(whoSchema, name, args);
       if (!parsed.ok) return parsed;
@@ -680,6 +1044,13 @@ export async function handleToolCall(name: string, args: unknown) {
     case "call_cancel": {
       const parsed = parse(closeSchema, name, args);
       if (!parsed.ok) return parsed;
+      const current = getCallBundle(parsed.data.call_id, false);
+      if (!current) return missingCall(name, parsed.data.call_id);
+      const interrupted = await interruptActiveParticipants({
+        callId: parsed.data.call_id,
+        participants: current.participants,
+        reason: parsed.data.summary,
+      });
       const bundle = setCallStatus(
         parsed.data.call_id,
         "cancelled",
@@ -691,8 +1062,8 @@ export async function handleToolCall(name: string, args: unknown) {
         tool: name,
         status: "cancelled",
         interrupt: {
-          implemented: false,
-          next: "turn/interrupt",
+          implemented: true,
+          interrupted,
         },
         ...bundle,
       };

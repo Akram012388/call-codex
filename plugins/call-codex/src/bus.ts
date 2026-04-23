@@ -43,6 +43,8 @@ export type ParticipantRow = {
   cwd: string;
   status: ParticipantStatus;
   current_task: string;
+  active_turn_id: string;
+  active_turn_started_at: string | null;
   last_seen: string;
   created_at: string;
 };
@@ -136,11 +138,29 @@ function migrate(database: Database) {
       cwd TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'queued',
       current_task TEXT NOT NULL DEFAULT '',
+      active_turn_id TEXT NOT NULL DEFAULT '',
+      active_turn_started_at TEXT,
       last_seen TEXT NOT NULL,
       created_at TEXT NOT NULL,
       UNIQUE(call_id, name)
     );
   `);
+
+  try {
+    database.run(
+      "ALTER TABLE participants ADD COLUMN active_turn_id TEXT NOT NULL DEFAULT '';",
+    );
+  } catch (error) {
+    if (!String(error).includes("duplicate column name")) throw error;
+  }
+
+  try {
+    database.run(
+      "ALTER TABLE participants ADD COLUMN active_turn_started_at TEXT;",
+    );
+  } catch (error) {
+    if (!String(error).includes("duplicate column name")) throw error;
+  }
 
   database.run(`
     CREATE TABLE IF NOT EXISTS messages (
@@ -308,6 +328,63 @@ export function setParticipantThreadId(input: {
   addEvent(input.callId, "participant.thread_linked", {
     name: input.name,
     thread_id: input.threadId,
+  });
+  return getParticipant({ callId: input.callId, name: input.name });
+}
+
+export function setParticipantActiveTurn(input: {
+  callId: string;
+  name: string;
+  turnId: string;
+  currentTask?: string;
+}) {
+  const stamp = now();
+  getDb().run(
+    `UPDATE participants
+     SET active_turn_id = ?, active_turn_started_at = ?, status = 'running',
+       current_task = COALESCE(NULLIF(?, ''), current_task), last_seen = ?
+     WHERE call_id = ? AND name = ?`,
+    [
+      input.turnId,
+      stamp,
+      input.currentTask ?? "",
+      stamp,
+      input.callId,
+      input.name,
+    ],
+  );
+  addEvent(input.callId, "participant.turn_started", {
+    name: input.name,
+    turn_id: input.turnId,
+  });
+  return getParticipant({ callId: input.callId, name: input.name });
+}
+
+export function clearParticipantActiveTurn(input: {
+  callId: string;
+  name: string;
+  status?: ParticipantStatus;
+  currentTask?: string;
+}) {
+  const stamp = now();
+  getDb().run(
+    `UPDATE participants
+     SET active_turn_id = '', active_turn_started_at = NULL,
+       status = COALESCE(?, status),
+       current_task = COALESCE(NULLIF(?, ''), current_task),
+       last_seen = ?
+     WHERE call_id = ? AND name = ?`,
+    [
+      input.status ?? null,
+      input.currentTask ?? "",
+      stamp,
+      input.callId,
+      input.name,
+    ],
+  );
+  addEvent(input.callId, "participant.turn_cleared", {
+    name: input.name,
+    status: input.status ?? null,
   });
   return getParticipant({ callId: input.callId, name: input.name });
 }

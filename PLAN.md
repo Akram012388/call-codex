@@ -146,7 +146,7 @@ Behavior:
 - Create a call row.
 - For `fork`, fork from the main thread when available.
 - For `fresh`, start new threads with base instructions and worker brief.
-- Start the first worker turn with the role and task.
+- Keep workers parked until `call_wake` starts an explicit turn.
 - Register each worker as a participant.
 
 ### `call_send`
@@ -165,7 +165,57 @@ Behavior:
 
 - Persist message.
 - Inject into target thread history.
-- If the target has an active turn, steer when appropriate.
+- Use `call_steer` for active-turn steering.
+
+### `call_wake`
+
+Starts one worker, or every worker on the call, with an explicit `turn/start`.
+
+Inputs:
+
+- `call_id`
+- `participant` optional
+- `prompt`
+- `cwd` optional
+
+Behavior:
+
+- Requires workers to have `thread_id`.
+- Starts a turn with a CALL-CODEX wake prompt.
+- Stores `active_turn_id` and `active_turn_started_at` on the participant.
+- Records the prompt in the local audit trail.
+
+### `call_steer`
+
+Steers one active worker turn with `turn/steer`.
+
+Inputs:
+
+- `call_id`
+- `participant`
+- `content`
+
+Behavior:
+
+- Requires an active turn.
+- Uses `active_turn_id` as `expectedTurnId`.
+- Records the steering message in the audit trail.
+
+### `call_interrupt`
+
+Interrupts one active worker, or every active worker on a call, with `turn/interrupt`.
+
+Inputs:
+
+- `call_id`
+- `participant` optional
+- `reason` optional
+
+Behavior:
+
+- Requires `thread_id` and `active_turn_id`.
+- Clears the active turn locally after app-server acknowledgement.
+- Leaves an auditable interrupted state.
 
 ### `call_broadcast`
 
@@ -405,13 +455,16 @@ Status: implemented for the local call core. `call_boot` starts a managed loopba
 - Add app-server injection.
 - Add audit trail and transcript basics.
 
-Status: partially implemented. `call_create` creates real Codex app-server worker threads for `fresh` calls and for `fork` calls when `main_thread_id` is supplied. `call_send` and `call_broadcast` inject messages through `thread/inject_items` when workers have thread IDs; otherwise messages remain queued on the auditable local board.
+Status: implemented for the initial messaging lane. `call_create` creates real Codex app-server worker threads for `fresh` calls and for `fork` calls when `main_thread_id` is supplied. `call_send` and `call_broadcast` inject messages through `thread/inject_items` when workers have thread IDs; otherwise messages remain queued on the auditable local board.
 
 ### Milestone 5: Control And Polish
 
 - Implement `call_update`, `call_cancel`, `call_close`, and `call_transcript`.
+- Implement `call_wake`, `call_steer`, and `call_interrupt`.
 - Tighten skill behavior.
 - Test through Codex macOS app.
+
+Status: partially implemented. Explicit worker control now supports `turn/start`, `turn/steer`, and `turn/interrupt`, with active turn IDs persisted on participants. Remaining polish is live event reading, automatic completed-turn cleanup, and richer `call_status` progress.
 
 ### Milestone 6: Public-Ready Plugin
 

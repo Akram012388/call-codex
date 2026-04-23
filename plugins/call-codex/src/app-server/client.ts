@@ -6,8 +6,13 @@ import type { ThreadInjectItemsParams } from "./generated/v2/ThreadInjectItemsPa
 import type { ThreadInjectItemsResponse } from "./generated/v2/ThreadInjectItemsResponse";
 import type { TurnStartParams } from "./generated/v2/TurnStartParams";
 import type { TurnStartResponse } from "./generated/v2/TurnStartResponse";
+import type { TurnSteerParams } from "./generated/v2/TurnSteerParams";
+import type { TurnSteerResponse } from "./generated/v2/TurnSteerResponse";
+import type { TurnInterruptParams } from "./generated/v2/TurnInterruptParams";
+import type { TurnInterruptResponse } from "./generated/v2/TurnInterruptResponse";
 import type { InitializeResponse } from "./generated/InitializeResponse";
 import type { JsonValue } from "./generated/serde_json/JsonValue";
+import type { UserInput } from "./generated/v2/UserInput";
 
 export type ManagedAppServerState = {
   url: string;
@@ -134,6 +139,16 @@ export class AppServerClient {
     return this.request<TurnStartResponse>("turn/start", params);
   }
 
+  async steerTurn(params: TurnSteerParams) {
+    await this.initialize();
+    return this.request<TurnSteerResponse>("turn/steer", params);
+  }
+
+  async interruptTurn(params: TurnInterruptParams) {
+    await this.initialize();
+    return this.request<TurnInterruptResponse>("turn/interrupt", params);
+  }
+
   async injectItems(params: ThreadInjectItemsParams) {
     await this.initialize();
     return this.request<ThreadInjectItemsResponse>(
@@ -214,5 +229,13 @@ export function userMessageItem(text: string): JsonValue {
     type: "message",
     role: "user",
     content: [{ type: "input_text", text }],
+  };
+}
+
+export function textUserInput(text: string): UserInput {
+  return {
+    type: "text",
+    text,
+    text_elements: [],
   };
 }
