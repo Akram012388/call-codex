@@ -24,6 +24,7 @@ import {
   userMessageItem,
 } from "./app-server/client";
 import type { MessageRow, ParticipantRow, RuntimeState } from "./bus";
+import type { WorkerTranscriptSection } from "./bus";
 import type { ThreadItem } from "./app-server/generated/v2/ThreadItem";
 import type { Turn } from "./app-server/generated/v2/Turn";
 
@@ -583,6 +584,109 @@ function latestAssistantText(items: ThreadItem[]) {
       text: item.text,
       phase: item.phase,
     }));
+}
+
+function textFromUserInput(item: Extract<ThreadItem, { type: "userMessage" }>) {
+  return item.content
+    .map((content) => {
+      if (content.type === "text") return content.text;
+      if (content.type === "image") return `[image] ${content.url}`;
+      if (content.type === "localImage") return `[local image] ${content.path}`;
+      if (content.type === "skill") return `[skill] ${content.name}`;
+      if (content.type === "mention") return `[mention] ${content.name}`;
+      return "";
+    })
+    .filter(Boolean)
+    .join("\n");
+}
+
+function transcriptEntries(items: ThreadItem[]) {
+  const entries: Array<{ type: string; text: string }> = [];
+
+  for (const item of items) {
+    if (item.type === "userMessage") {
+      const text = textFromUserInput(item);
+      if (text.trim()) entries.push({ type: "user", text });
+      continue;
+    }
+
+    if (item.type === "agentMessage" && item.text.trim()) {
+      entries.push({ type: "assistant", text: item.text });
+      continue;
+    }
+
+    if (item.type === "plan" && item.text.trim()) {
+      entries.push({ type: "plan", text: item.text });
+      continue;
+    }
+
+    if (item.type === "reasoning" && item.summary.length > 0) {
+      entries.push({ type: "reasoning", text: item.summary.join("\n") });
+      continue;
+    }
+
+    if (
+      item.type === "commandExecution" &&
+      (item.command.trim() || item.aggregatedOutput?.trim())
+    ) {
+      entries.push({
+        type: "command",
+        text: [item.command, item.aggregatedOutput ?? ""]
+          .filter((part) => part.trim())
+          .join("\n\n"),
+      });
+    }
+  }
+
+  return entries;
+}
+
+async function importWorkerTranscriptSections(
+  participants: ParticipantRow[],
+): Promise<WorkerTranscriptSection[]> {
+  const withThreads = participants.filter(
+    (participant) => participant.thread_id,
+  );
+  if (withThreads.length === 0) return [];
+
+  const boot = await bootManagedAppServer();
+  const runtime = requireRuntime(boot.runtime);
+  const client = new AppServerClient(runtime.url);
+  const sections: WorkerTranscriptSection[] = [];
+
+  try {
+    for (const participant of withThreads) {
+      try {
+        const read = await client.readThread({
+          threadId: participant.thread_id,
+          includeTurns: true,
+        });
+        sections.push({
+          participant: participant.name,
+          thread_id: participant.thread_id,
+          turns: read.thread.turns.map((turn) => ({
+            id: turn.id,
+            status: turn.status,
+            started_at: turn.startedAt,
+            completed_at: turn.completedAt,
+            duration_ms: turn.durationMs,
+            entries: transcriptEntries(turn.items),
+          })),
+        });
+      } catch (error) {
+        sections.push({
+          participant: participant.name,
+          thread_id: participant.thread_id,
+          turns: [],
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  } finally {
+    client.close();
+  }
+
+  return sections;
 }
 
 function turnErrorSummary(turn: Turn) {
@@ -1239,12 +1343,18 @@ export async function handleToolCall(name: string, args: unknown) {
     case "call_transcript": {
       const parsed = parse(transcriptSchema, name, args);
       if (!parsed.ok) return parsed;
-      const transcript = buildTranscript(parsed.data.call_id);
+      const bundle = getCallBundle(parsed.data.call_id, false);
+      if (!bundle) return missingCall(name, parsed.data.call_id);
+      const workerSections = await importWorkerTranscriptSections(
+        bundle.participants,
+      );
+      const transcript = buildTranscript(parsed.data.call_id, workerSections);
       if (!transcript) return missingCall(name, parsed.data.call_id);
       return {
         ok: true,
         tool: name,
         format: parsed.data.format,
+        worker_sections_imported: workerSections.length,
         transcript,
       };
     }

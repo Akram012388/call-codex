@@ -75,6 +75,11 @@ function fakeControlAppServer() {
           return;
         }
 
+        if (request.method === "thread/inject_items") {
+          ws.send(JSON.stringify({ id: request.id, result: {} }));
+          return;
+        }
+
         if (request.method === "thread/read") {
           ws.send(
             JSON.stringify({
@@ -298,6 +303,65 @@ describe("CALL-CODEX scaffold tools", () => {
       expect(calls.map((call) => call.method)).toEqual([
         "initialize",
         "turn/start",
+        "initialize",
+        "thread/read",
+      ]);
+    } finally {
+      server.stop(true);
+    }
+  });
+
+  test("call_transcript imports worker assistant output", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const { server, calls } = fakeControlAppServer();
+    upsertRuntime({
+      url: `ws://127.0.0.1:${server.port}`,
+      pid: process.pid,
+      status: "running",
+    });
+
+    try {
+      const created = await handleToolCall("call_create", {
+        title: "Imported transcript call",
+        workers: [{ name: "scribe", role: "worker", brief: "write it down" }],
+      });
+      const callId = "call" in created && created.call ? created.call.id : "";
+      setParticipantThreadId({
+        callId,
+        name: "scribe",
+        threadId: "thread-control",
+      });
+
+      await handleToolCall("call_send", {
+        call_id: callId,
+        to: "scribe",
+        content: "Record the worker output.",
+      });
+      const transcript = await handleToolCall("call_transcript", {
+        call_id: callId,
+      });
+
+      expect(transcript.ok).toBe(true);
+      expect(
+        "worker_sections_imported" in transcript
+          ? transcript.worker_sections_imported
+          : 0,
+      ).toBe(1);
+      expect(
+        "transcript" in transcript
+          ? transcript.transcript?.includes("## Worker Output")
+          : false,
+      ).toBe(true);
+      expect(
+        "transcript" in transcript
+          ? transcript.transcript?.includes(
+              "Mission complete. The line is clear.",
+            )
+          : false,
+      ).toBe(true);
+      expect(calls.map((call) => call.method)).toEqual([
+        "initialize",
+        "thread/inject_items",
         "initialize",
         "thread/read",
       ]);

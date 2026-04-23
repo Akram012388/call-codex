@@ -559,7 +559,27 @@ export function addEvent(
   );
 }
 
-export function buildTranscript(callId: string) {
+export type WorkerTranscriptSection = {
+  participant: string;
+  thread_id: string;
+  turns: Array<{
+    id: string;
+    status: string;
+    started_at: number | null;
+    completed_at: number | null;
+    duration_ms: number | null;
+    entries: Array<{
+      type: string;
+      text: string;
+    }>;
+  }>;
+  error?: string;
+};
+
+export function buildTranscript(
+  callId: string,
+  workerSections: WorkerTranscriptSection[] = [],
+) {
   const bundle = getCallBundle(callId, false);
   if (!bundle) return null;
 
@@ -589,6 +609,46 @@ export function buildTranscript(callId: string) {
           `- ${message.created_at} ${message.from_name} -> ${message.to_name}: ${message.content}`,
       ),
   ];
+
+  if (workerSections.length > 0) {
+    lines.push("", "## Worker Output", "");
+    for (const worker of workerSections) {
+      lines.push(
+        `### ${worker.participant}`,
+        "",
+        `- Thread: ${worker.thread_id}`,
+      );
+      if (worker.error) {
+        lines.push(`- Import error: ${worker.error}`, "");
+        continue;
+      }
+
+      if (worker.turns.length === 0) {
+        lines.push("- No worker turns imported.", "");
+        continue;
+      }
+
+      lines.push("");
+      for (const turn of worker.turns) {
+        lines.push(
+          `#### Turn ${turn.id}`,
+          "",
+          `- Status: ${turn.status}`,
+          `- Started: ${turn.started_at ?? "unknown"}`,
+          `- Completed: ${turn.completed_at ?? "pending"}`,
+          `- Duration: ${turn.duration_ms ?? "unknown"} ms`,
+          "",
+        );
+        if (turn.entries.length === 0) {
+          lines.push("- No transcript entries.", "");
+          continue;
+        }
+        for (const entry of turn.entries) {
+          lines.push(`**${entry.type}**`, "", entry.text, "");
+        }
+      }
+    }
+  }
 
   return lines.join("\n");
 }
