@@ -166,6 +166,11 @@ function fakeControlAppServer() {
           return;
         }
 
+        if (request.method === "thread/archive") {
+          ws.send(JSON.stringify({ id: request.id, result: {} }));
+          return;
+        }
+
         if (request.method === "thread/read") {
           ws.send(
             JSON.stringify({
@@ -278,6 +283,7 @@ describe("CALL-CODEX scaffold tools", () => {
       "call_interrupt",
       "call_who",
       "call_reveal",
+      "call_remove_thread",
       "call_update",
       "call_status",
       "call_cancel",
@@ -487,6 +493,48 @@ describe("CALL-CODEX scaffold tools", () => {
       ]);
     } finally {
       delete process.env.CALL_CODEX_REVEAL_DRY_RUN;
+      server.stop(true);
+    }
+  });
+
+  test("removes a worker thread from the call board", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const { server, calls } = fakeControlAppServer();
+    upsertRuntime({
+      url: `ws://127.0.0.1:${server.port}`,
+      pid: process.pid,
+      status: "running",
+    });
+
+    try {
+      const created = await handleToolCall("call_create", {
+        title: "Remove call",
+        mode: "fork",
+        workers: [{ name: "gone", role: "worker", brief: "step away" }],
+      });
+      const callId = "call" in created && created.call ? created.call.id : "";
+      setParticipantThreadId({
+        callId,
+        name: "gone",
+        threadId: "thread-control",
+      });
+
+      const removed = await handleToolCall("call_remove_thread", {
+        call_id: callId,
+        participant: "gone",
+      });
+      const result = removed as {
+        archive?: { archived?: boolean };
+        participants?: Array<{ name: string }>;
+      };
+
+      expect(removed.ok).toBe(true);
+      expect(result.archive?.archived).toBe(true);
+      expect(result.participants?.some((item) => item.name === "gone")).toBe(
+        false,
+      );
+      expect(calls.map((call) => call.method)).toContain("thread/archive");
+    } finally {
       server.stop(true);
     }
   });

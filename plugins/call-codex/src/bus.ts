@@ -627,6 +627,33 @@ export function setCallStatus(
   return getCallBundle(callId);
 }
 
+export function removeParticipant(input: { callId: string; name: string }) {
+  const participant = getParticipant(input);
+  if (!participant) return null;
+
+  getDb().transaction(() => {
+    addEvent(input.callId, "participant.removed", {
+      name: input.name,
+      thread_id: participant.thread_id,
+      worktree_path: participant.worktree_path,
+    });
+    getDb().run(
+      "DELETE FROM worker_transcript_items WHERE call_id = ? AND participant = ?",
+      [input.callId, input.name],
+    );
+    getDb().run(
+      "DELETE FROM messages WHERE call_id = ? AND (from_name = ? OR to_name = ?)",
+      [input.callId, input.name, input.name],
+    );
+    getDb().run("DELETE FROM participants WHERE call_id = ? AND name = ?", [
+      input.callId,
+      input.name,
+    ]);
+  })();
+
+  return participant;
+}
+
 export function addEvent(
   callId: string | null,
   eventType: string,

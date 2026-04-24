@@ -8,6 +8,8 @@ import type { ThreadReadParams } from "./generated/v2/ThreadReadParams";
 import type { ThreadReadResponse } from "./generated/v2/ThreadReadResponse";
 import type { ThreadSetNameParams } from "./generated/v2/ThreadSetNameParams";
 import type { ThreadSetNameResponse } from "./generated/v2/ThreadSetNameResponse";
+import type { ThreadArchiveParams } from "./generated/v2/ThreadArchiveParams";
+import type { ThreadArchiveResponse } from "./generated/v2/ThreadArchiveResponse";
 import type { TurnStartParams } from "./generated/v2/TurnStartParams";
 import type { TurnStartResponse } from "./generated/v2/TurnStartResponse";
 import type { TurnSteerParams } from "./generated/v2/TurnSteerParams";
@@ -175,6 +177,11 @@ export class AppServerClient {
   async setThreadName(params: ThreadSetNameParams) {
     await this.initialize();
     return this.request<ThreadSetNameResponse>("thread/name/set", params);
+  }
+
+  async archiveThread(params: ThreadArchiveParams) {
+    await this.initialize();
+    return this.request<ThreadArchiveResponse>("thread/archive", params);
   }
 
   onNotification(handler: AppServerNotificationHandler) {

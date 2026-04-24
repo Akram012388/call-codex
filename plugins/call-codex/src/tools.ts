@@ -1,5 +1,6 @@
 import { z } from "zod";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, rmSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   addMessage,
@@ -14,6 +15,7 @@ import {
   listMessages,
   listParticipants,
   markMessageInjected,
+  removeParticipant,
   clearParticipantActiveTurn,
   setCallStatus,
   setParticipantActiveTurn,
@@ -240,6 +242,22 @@ export const toolDefinitions = [
     },
   },
   {
+    name: "call_remove_thread",
+    description:
+      "Cleanly remove one worker thread from a call, with optional worktree cleanup.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        call_id: { type: "string" },
+        participant: { type: "string" },
+        archive_thread: { type: "boolean", default: true },
+        cleanup_cache: { type: "boolean", default: true },
+        remove_worktree: { type: "boolean", default: false },
+      },
+      required: ["call_id", "participant"],
+    },
+  },
+  {
     name: "call_update",
     description: "Update call, participant, or task state.",
     inputSchema: {
@@ -386,6 +404,14 @@ const whoSchema = z.object({
 const revealSchema = z.object({
   call_id: z.string().min(1),
   participant: z.string().min(1).max(64).optional(),
+});
+
+const removeThreadSchema = z.object({
+  call_id: z.string().min(1),
+  participant: z.string().min(1).max(64),
+  archive_thread: z.boolean().default(true),
+  cleanup_cache: z.boolean().default(true),
+  remove_worktree: z.boolean().default(false),
 });
 
 const updateSchema = z.object({
@@ -637,6 +663,73 @@ async function prepareWorkerWorktrees(input: {
     });
   }
   return results;
+}
+
+function cleanupThreadSessionFiles(threadId: string) {
+  const roots = [
+    join(homedir(), ".codex", "sessions"),
+    join(homedir(), ".codex", "archived_sessions"),
+  ];
+  const removed = [];
+
+  for (const root of roots) {
+    const finder = Bun.spawnSync([
+      "find",
+      root,
+      "-name",
+      `*${threadId}*`,
+      "-type",
+      "f",
+    ]);
+    if (finder.exitCode !== 0) continue;
+    const files = new TextDecoder()
+      .decode(finder.stdout)
+      .split("\n")
+      .filter(Boolean);
+    for (const file of files) {
+      rmSync(file, { force: true });
+      removed.push(file);
+    }
+  }
+
+  return removed;
+}
+
+async function removeWorkerWorktree(participant: ParticipantRow) {
+  if (!participant.worktree_path) {
+    return { removed: false, reason: "Participant has no worktree path." };
+  }
+
+  if (!existsSync(participant.worktree_path)) {
+    return {
+      removed: true,
+      path: participant.worktree_path,
+      already_missing: true,
+    };
+  }
+
+  const repo = await runGit(
+    ["rev-parse", "--show-toplevel"],
+    participant.worktree_path,
+  );
+  if (repo.exitCode !== 0) {
+    return {
+      removed: false,
+      path: participant.worktree_path,
+      reason: repo.stderr,
+    };
+  }
+
+  const removed = await runGit(
+    ["worktree", "remove", "--force", participant.worktree_path],
+    repo.stdout,
+  );
+  return {
+    removed: removed.exitCode === 0,
+    path: participant.worktree_path,
+    branch: participant.branch_name,
+    reason: removed.exitCode === 0 ? null : removed.stderr || removed.stdout,
+  };
 }
 
 function callMessageText(message: MessageRow) {
@@ -1470,6 +1563,70 @@ export async function handleToolCall(name: string, args: unknown) {
           ? "CALL-CODEX brought the worker thread to the Codex app glass."
           : "CALL-CODEX could not reveal a worker thread yet.",
         reveal,
+      };
+    }
+
+    case "call_remove_thread": {
+      const parsed = parse(removeThreadSchema, name, args);
+      if (!parsed.ok) return parsed;
+      const participant = getParticipant({
+        callId: parsed.data.call_id,
+        name: parsed.data.participant,
+      });
+      if (!participant) {
+        return missingParticipant(
+          name,
+          parsed.data.call_id,
+          parsed.data.participant,
+        );
+      }
+
+      let archive:
+        | { archived: boolean; error: string | null }
+        | { archived: false; skipped: true; error: null } = {
+        archived: false,
+        skipped: true,
+        error: null,
+      };
+      if (parsed.data.archive_thread && participant.thread_id) {
+        const boot = await bootManagedAppServer();
+        const runtime = requireRuntime(boot.runtime);
+        const client = new AppServerClient(runtime.url);
+        try {
+          await client.archiveThread({ threadId: participant.thread_id });
+          archive = { archived: true, error: null };
+        } catch (error) {
+          archive = {
+            archived: false,
+            error: error instanceof Error ? error.message : String(error),
+          };
+        } finally {
+          client.close();
+        }
+      }
+
+      const cache_files_removed =
+        parsed.data.cleanup_cache && participant.thread_id
+          ? cleanupThreadSessionFiles(participant.thread_id)
+          : [];
+      const worktree = parsed.data.remove_worktree
+        ? await removeWorkerWorktree(participant)
+        : { removed: false, skipped: true };
+      const removed = removeParticipant({
+        callId: parsed.data.call_id,
+        name: parsed.data.participant,
+      });
+
+      return {
+        ok: true,
+        tool: name,
+        status: "removed",
+        participant: removed?.name ?? parsed.data.participant,
+        thread_id: participant.thread_id,
+        archive,
+        cache_files_removed,
+        worktree,
+        ...getCallBundle(parsed.data.call_id),
       };
     }
 
