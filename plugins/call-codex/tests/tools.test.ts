@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
@@ -7,10 +7,17 @@ import {
   setParticipantThreadId,
   upsertRuntime,
 } from "../src/bus";
+import { resetLiveStateForTests } from "../src/live";
 import { handleToolCall, toolDefinitions } from "../src/tools";
 
 function fakeControlAppServer() {
   const calls: Array<{ method: string; params: unknown }> = [];
+  const sockets = new Set<{ send: (message: string) => void }>();
+  const broadcast = (message: unknown) => {
+    for (const socket of sockets) {
+      socket.send(JSON.stringify(message));
+    }
+  };
   const server = Bun.serve({
     port: 0,
     fetch(request, server) {
@@ -18,6 +25,12 @@ function fakeControlAppServer() {
       return new Response("CALL-CODEX fake control app-server");
     },
     websocket: {
+      open(ws) {
+        sockets.add(ws);
+      },
+      close(ws) {
+        sockets.delete(ws);
+      },
       message(ws, message) {
         const request = JSON.parse(String(message)) as {
           id: number;
@@ -58,6 +71,40 @@ function fakeControlAppServer() {
               },
             }),
           );
+          queueMicrotask(() => {
+            broadcast({
+              method: "item/agentMessage/delta",
+              params: {
+                threadId: "thread-control",
+                turnId: "turn-control",
+                itemId: "agent-control",
+                delta: "Mission complete. The line is clear.",
+              },
+            });
+            broadcast({
+              method: "turn/completed",
+              params: {
+                threadId: "thread-control",
+                turn: {
+                  id: "turn-control",
+                  items: [
+                    {
+                      type: "agentMessage",
+                      id: "agent-control",
+                      text: "Mission complete. The line is clear.",
+                      phase: "final_answer",
+                      memoryCitation: null,
+                    },
+                  ],
+                  status: "completed",
+                  error: null,
+                  startedAt: 1,
+                  completedAt: 2,
+                  durationMs: 1000,
+                },
+              },
+            });
+          });
           return;
         }
 
@@ -175,6 +222,10 @@ function fakeFailingReadAppServer() {
 }
 
 describe("CALL-CODEX scaffold tools", () => {
+  beforeEach(() => {
+    resetLiveStateForTests();
+  });
+
   test("exposes the pro v1 call surface", () => {
     expect(toolDefinitions.map((tool) => tool.name)).toEqual([
       "call_boot",
@@ -288,6 +339,7 @@ describe("CALL-CODEX scaffold tools", () => {
       );
       expect(calls.map((call) => call.method)).toEqual([
         "initialize",
+        "initialize",
         "turn/start",
         "initialize",
         "turn/steer",
@@ -375,11 +427,13 @@ describe("CALL-CODEX scaffold tools", () => {
         participant: "reader",
         prompt: "Finish and report.",
       });
+      await Bun.sleep(10);
       const status = await handleToolCall("call_status", { call_id: callId });
       const statusResult = status as {
         worker_progress?: {
           workers: Array<{
             latest_assistant_messages: Array<{ text: string }>;
+            source?: string;
           }>;
           auto_cleared: Array<{ status: string }>;
         };
@@ -400,6 +454,11 @@ describe("CALL-CODEX scaffold tools", () => {
           : "",
       ).toBe("completed");
       expect(
+        statusResult.worker_progress
+          ? statusResult.worker_progress.workers[0]?.source
+          : "",
+      ).toBe("live_stream");
+      expect(
         statusResult.participants
           ? statusResult.participants[0]?.active_turn_id
           : "",
@@ -409,9 +468,8 @@ describe("CALL-CODEX scaffold tools", () => {
       ).toBe("done");
       expect(calls.map((call) => call.method)).toEqual([
         "initialize",
-        "turn/start",
         "initialize",
-        "thread/read",
+        "turn/start",
       ]);
     } finally {
       server.stop(true);
@@ -484,6 +542,7 @@ describe("CALL-CODEX scaffold tools", () => {
       expect(calls.map((call) => call.method)).toEqual([
         "initialize",
         "thread/inject_items",
+        "initialize",
         "initialize",
         "thread/read",
       ]);
@@ -580,6 +639,7 @@ describe("CALL-CODEX scaffold tools", () => {
           : null,
       ).toBeTruthy();
       expect(failing.calls.map((call) => call.method)).toEqual([
+        "initialize",
         "initialize",
         "thread/read",
       ]);

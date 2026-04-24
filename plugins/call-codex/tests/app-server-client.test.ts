@@ -63,6 +63,25 @@ function fakeAppServer() {
               },
             }),
           );
+          setTimeout(() => {
+            ws.send(
+              JSON.stringify({
+                method: "turn/started",
+                params: {
+                  threadId: "thread-test",
+                  turn: {
+                    id: "turn-notify",
+                    items: [],
+                    status: "inProgress",
+                    error: null,
+                    startedAt: 1,
+                    completedAt: null,
+                    durationMs: null,
+                  },
+                },
+              }),
+            );
+          }, 0);
           return;
         }
 
@@ -142,6 +161,30 @@ function fakeAppServer() {
 }
 
 describe("AppServerClient", () => {
+  test("delivers app-server notifications without matching request ids", async () => {
+    const { server } = fakeAppServer();
+    const client = new AppServerClient(`ws://127.0.0.1:${server.port}`);
+
+    try {
+      const notification = new Promise<{ method: string }>((resolve) => {
+        client.onNotification(resolve);
+      });
+      await client.startThread({
+        cwd: "/tmp/call-codex",
+        developerInstructions: "Keep the call line clear.",
+        ephemeral: false,
+        experimentalRawEvents: false,
+        persistExtendedHistory: true,
+      });
+      await expect(notification).resolves.toMatchObject({
+        method: "turn/started",
+      });
+    } finally {
+      client.close();
+      server.stop(true);
+    }
+  });
+
   test("initializes once, starts a thread, and injects items", async () => {
     const { server, calls } = fakeAppServer();
     const client = new AppServerClient(`ws://127.0.0.1:${server.port}`);

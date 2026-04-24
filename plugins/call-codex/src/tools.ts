@@ -25,10 +25,10 @@ import {
   textUserInput,
   userMessageItem,
 } from "./app-server/client";
+import { ensureLiveMonitor, getLiveTurn, listLiveTurns } from "./live";
 import type { MessageRow, ParticipantRow, RuntimeState } from "./bus";
 import type { WorkerTranscriptSection } from "./bus";
 import type { ThreadItem } from "./app-server/generated/v2/ThreadItem";
-import type { Turn } from "./app-server/generated/v2/Turn";
 
 const CACHE_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
 
@@ -773,6 +773,24 @@ function transcriptEntries(items: ThreadItem[]) {
   return entries;
 }
 
+function liveTurnToTranscriptTurn(turn: {
+  id: string;
+  status: string;
+  started_at: number | null;
+  completed_at: number | null;
+  duration_ms: number | null;
+  items: ThreadItem[];
+}) {
+  return {
+    id: turn.id,
+    status: turn.status,
+    started_at: turn.started_at,
+    completed_at: turn.completed_at,
+    duration_ms: turn.duration_ms,
+    entries: transcriptEntries(turn.items),
+  };
+}
+
 function transcriptMetadata(sections: WorkerTranscriptSection[]) {
   return sections.map((section) => ({
     participant: section.participant,
@@ -822,11 +840,33 @@ async function importWorkerTranscriptSections(
 
   const boot = await bootManagedAppServer();
   const runtime = requireRuntime(boot.runtime);
+  ensureLiveMonitor(runtime.url);
   const client = new AppServerClient(runtime.url);
   const sections: WorkerTranscriptSection[] = [];
 
   try {
     for (const participant of withThreads) {
+      const liveTurns = listLiveTurns(participant.thread_id);
+      if (liveTurns.length > 0) {
+        const section = {
+          participant: participant.name,
+          thread_id: participant.thread_id,
+          source: "live" as const,
+          imported_at: new Date().toISOString(),
+          cache_state: "fresh" as const,
+          cache_age_ms: 0,
+          turns: liveTurns.map(liveTurnToTranscriptTurn),
+        };
+        sections.push(section);
+        upsertWorkerTranscriptItems({
+          callId,
+          participant: participant.name,
+          threadId: participant.thread_id,
+          turns: section.turns,
+        });
+        continue;
+      }
+
       try {
         const read = await client.readThread({
           threadId: participant.thread_id,
@@ -891,19 +931,19 @@ async function importWorkerTranscriptSections(
   return sections;
 }
 
-function turnErrorSummary(turn: Turn) {
+function turnErrorSummary(turn: { error?: unknown | null }) {
   if (!turn.error) return null;
   return JSON.stringify(turn.error);
 }
 
-function participantStatusForTurn(turn: Turn) {
+function participantStatusForTurn(turn: { status: string }) {
   if (turn.status === "completed") return "done";
   if (turn.status === "failed") return "failed";
   if (turn.status === "interrupted") return "blocked";
   return "running";
 }
 
-function isTerminalTurn(turn: Turn) {
+function isTerminalTurn(turn: { status: string }) {
   return (
     turn.status === "completed" ||
     turn.status === "failed" ||
@@ -929,6 +969,7 @@ async function refreshWorkerProgress(input: {
 
   const boot = await bootManagedAppServer();
   const runtime = requireRuntime(boot.runtime);
+  ensureLiveMonitor(runtime.url);
   const client = new AppServerClient(runtime.url);
   const workers = [];
   const autoCleared = [];
@@ -936,16 +977,31 @@ async function refreshWorkerProgress(input: {
   try {
     for (const participant of active) {
       try {
-        const read = await client.readThread({
-          threadId: participant.thread_id,
-          includeTurns: true,
-        });
-        const turn =
-          read.thread.turns.find(
-            (item) => item.id === participant.active_turn_id,
-          ) ??
-          read.thread.turns.at(-1) ??
-          null;
+        const liveTurn = getLiveTurn(
+          participant.thread_id,
+          participant.active_turn_id,
+        );
+        const read = liveTurn
+          ? null
+          : await client.readThread({
+              threadId: participant.thread_id,
+              includeTurns: true,
+            });
+        const turn = liveTurn
+          ? {
+              id: liveTurn.id,
+              items: liveTurn.items,
+              status: liveTurn.status,
+              error: null,
+              startedAt: liveTurn.started_at,
+              completedAt: liveTurn.completed_at,
+              durationMs: liveTurn.duration_ms,
+            }
+          : (read?.thread.turns.find(
+              (item) => item.id === participant.active_turn_id,
+            ) ??
+            read?.thread.turns.at(-1) ??
+            null);
 
         if (!turn) {
           workers.push({
@@ -983,6 +1039,7 @@ async function refreshWorkerProgress(input: {
           active_turn_id: participant.active_turn_id,
           turn_id: turn.id,
           turn_status: turn.status,
+          source: liveTurn ? "live_stream" : "live_read",
           participant_status: status,
           started_at: turn.startedAt,
           completed_at: turn.completedAt,
@@ -1089,6 +1146,9 @@ export async function handleToolCall(name: string, args: unknown) {
       const boot = await bootManagedAppServer({
         forceRestart: parsed.data.force_restart,
       });
+      if (boot.runtime?.url) {
+        ensureLiveMonitor(boot.runtime.url);
+      }
       return {
         ok: true,
         tool: name,
@@ -1304,6 +1364,7 @@ export async function handleToolCall(name: string, args: unknown) {
 
       const boot = await bootManagedAppServer();
       const runtime = requireRuntime(boot.runtime);
+      await ensureLiveMonitor(runtime.url).ready.catch(() => null);
       const client = new AppServerClient(runtime.url);
       const wakeups = [];
 

@@ -15,6 +15,7 @@ import type { TurnSteerResponse } from "./generated/v2/TurnSteerResponse";
 import type { TurnInterruptParams } from "./generated/v2/TurnInterruptParams";
 import type { TurnInterruptResponse } from "./generated/v2/TurnInterruptResponse";
 import type { InitializeResponse } from "./generated/InitializeResponse";
+import type { ServerNotification } from "./generated/ServerNotification";
 import type { JsonValue } from "./generated/serde_json/JsonValue";
 import type { UserInput } from "./generated/v2/UserInput";
 
@@ -65,10 +66,15 @@ export type AppServerClientOptions = {
   requestTimeoutMs?: number;
 };
 
+export type AppServerNotificationHandler = (
+  notification: ServerNotification,
+) => void;
+
 export class AppServerClient {
   private ws: WebSocket | null = null;
   private nextId = 1;
   private pending = new Map<number, PendingRequest>();
+  private notificationHandlers = new Set<AppServerNotificationHandler>();
   private initialized = false;
   private readonly requestTimeoutMs: number;
 
@@ -171,6 +177,11 @@ export class AppServerClient {
     return this.request<ThreadSetNameResponse>("thread/name/set", params);
   }
 
+  onNotification(handler: AppServerNotificationHandler) {
+    this.notificationHandlers.add(handler);
+    return () => this.notificationHandlers.delete(handler);
+  }
+
   close() {
     this.ws?.close();
     this.ws = null;
@@ -214,7 +225,14 @@ export class AppServerClient {
       return;
     }
 
-    if (typeof message.id !== "number") return;
+    if (typeof message.id !== "number") {
+      if (typeof message.method === "string") {
+        for (const handler of this.notificationHandlers) {
+          handler(message as ServerNotification);
+        }
+      }
+      return;
+    }
     const pending = this.pending.get(message.id);
     if (!pending) return;
 
