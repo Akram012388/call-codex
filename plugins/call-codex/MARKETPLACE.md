@@ -2,7 +2,7 @@
 
 ## Name
 
-CALL-CODEX
+Call-Codex (local)
 
 ## Short Description
 

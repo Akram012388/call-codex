@@ -1,7 +1,7 @@
 {
   "name": "call-codex-local",
   "interface": {
-    "displayName": "CALL-CODEX Local"
+    "displayName": "Call-Codex (local)"
   },
   "plugins": [
     {

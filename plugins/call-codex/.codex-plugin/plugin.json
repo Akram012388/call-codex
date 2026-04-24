@@ -20,7 +20,7 @@
   "skills": "./skills/",
   "mcpServers": "./.mcp.json",
   "interface": {
-    "displayName": "CALL-CODEX",
+    "displayName": "Call-Codex (local)",
     "shortDescription": "Dial worker threads from Codex",
     "longDescription": "CALL-CODEX is a macOS-first Codex plugin for super-user multi-thread missions. A main thread can boot a managed loopback app-server, create worktree-isolated worker threads, assign first-class roles, send call-line messages, stream worker progress, cleanly remove threads, and preserve local SQLite receipts.",
     "developerName": "Shaikh Akram Ahmed",
