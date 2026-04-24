@@ -45,6 +45,13 @@ export type ParticipantRow = {
   cwd: string;
   worktree_path: string;
   branch_name: string;
+  capabilities_json: string;
+  allowed_scope: string;
+  model: string;
+  reasoning_effort: string;
+  permissions_json: string;
+  deliverables_json: string;
+  reporting_contract: string;
   status: ParticipantStatus;
   current_task: string;
   active_turn_id: string;
@@ -158,6 +165,13 @@ function migrate(database: Database) {
       cwd TEXT NOT NULL DEFAULT '',
       worktree_path TEXT NOT NULL DEFAULT '',
       branch_name TEXT NOT NULL DEFAULT '',
+      capabilities_json TEXT NOT NULL DEFAULT '[]',
+      allowed_scope TEXT NOT NULL DEFAULT '',
+      model TEXT NOT NULL DEFAULT '',
+      reasoning_effort TEXT NOT NULL DEFAULT '',
+      permissions_json TEXT NOT NULL DEFAULT '{}',
+      deliverables_json TEXT NOT NULL DEFAULT '[]',
+      reporting_contract TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'queued',
       current_task TEXT NOT NULL DEFAULT '',
       active_turn_id TEXT NOT NULL DEFAULT '',
@@ -174,6 +188,24 @@ function migrate(database: Database) {
     );
   } catch (error) {
     if (!String(error).includes("duplicate column name")) throw error;
+  }
+
+  for (const [column, definition] of [
+    ["capabilities_json", "TEXT NOT NULL DEFAULT '[]'"],
+    ["allowed_scope", "TEXT NOT NULL DEFAULT ''"],
+    ["model", "TEXT NOT NULL DEFAULT ''"],
+    ["reasoning_effort", "TEXT NOT NULL DEFAULT ''"],
+    ["permissions_json", "TEXT NOT NULL DEFAULT '{}'"],
+    ["deliverables_json", "TEXT NOT NULL DEFAULT '[]'"],
+    ["reporting_contract", "TEXT NOT NULL DEFAULT ''"],
+  ] as const) {
+    try {
+      database.run(
+        `ALTER TABLE participants ADD COLUMN ${column} ${definition};`,
+      );
+    } catch (error) {
+      if (!String(error).includes("duplicate column name")) throw error;
+    }
   }
 
   try {
@@ -284,6 +316,13 @@ export function createCall(input: {
     brief: string;
     worktree_path?: string;
     branch_name?: string;
+    capabilities?: string[];
+    allowed_scope?: string;
+    model?: string;
+    reasoning_effort?: string;
+    permissions?: Record<string, unknown>;
+    deliverables?: string[];
+    reporting_contract?: string;
   }>;
   cwd?: string;
 }) {
@@ -302,8 +341,10 @@ export function createCall(input: {
     for (const worker of input.workers) {
       database.run(
         `INSERT INTO participants
-         (id, call_id, name, role, brief, thread_id, cwd, worktree_path, branch_name, status, current_task, last_seen, created_at)
-         VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, 'queued', ?, ?, ?)`,
+         (id, call_id, name, role, brief, thread_id, cwd, worktree_path, branch_name,
+          capabilities_json, allowed_scope, model, reasoning_effort, permissions_json,
+          deliverables_json, reporting_contract, status, current_task, last_seen, created_at)
+         VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'queued', ?, ?, ?)`,
         [
           `participant-${crypto.randomUUID().slice(0, 8)}`,
           callId,
@@ -313,6 +354,13 @@ export function createCall(input: {
           worker.worktree_path || input.cwd || "",
           worker.worktree_path ?? "",
           worker.branch_name ?? "",
+          JSON.stringify(worker.capabilities ?? []),
+          worker.allowed_scope ?? "",
+          worker.model ?? "",
+          worker.reasoning_effort ?? "",
+          JSON.stringify(worker.permissions ?? {}),
+          JSON.stringify(worker.deliverables ?? []),
+          worker.reporting_contract ?? "",
           worker.brief,
           stamp,
           stamp,

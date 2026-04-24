@@ -46,6 +46,15 @@ const workerSchema = z.object({
   name: z.string().min(1).max(64),
   role: z.string().min(1).max(64),
   brief: z.string().min(1).max(10_000),
+  capabilities: z.array(z.string().min(1).max(100)).default([]),
+  allowed_scope: z.string().max(2_000).default(""),
+  model: z.string().max(100).optional(),
+  reasoning_effort: z
+    .enum(["none", "minimal", "low", "medium", "high", "xhigh"])
+    .optional(),
+  permissions: z.record(z.string(), z.unknown()).default({}),
+  deliverables: z.array(z.string().min(1).max(200)).default([]),
+  reporting_contract: z.string().max(2_000).default(""),
   worktree_path: z.string().optional(),
   branch_name: z.string().optional(),
 });
@@ -103,6 +112,16 @@ export const toolDefinitions = [
               name: { type: "string" },
               role: { type: "string" },
               brief: { type: "string" },
+              capabilities: { type: "array", items: { type: "string" } },
+              allowed_scope: { type: "string" },
+              model: { type: "string" },
+              reasoning_effort: {
+                type: "string",
+                enum: ["none", "minimal", "low", "medium", "high", "xhigh"],
+              },
+              permissions: { type: "object" },
+              deliverables: { type: "array", items: { type: "string" } },
+              reporting_contract: { type: "string" },
               worktree_path: { type: "string" },
               branch_name: { type: "string" },
             },
@@ -479,7 +498,15 @@ function requireRuntime(runtime: RuntimeState | null) {
 
 function workerInstructions(
   callTitle: string,
-  worker: { name: string; role: string; brief: string },
+  worker: {
+    name: string;
+    role: string;
+    brief: string;
+    capabilities?: string[];
+    allowed_scope?: string;
+    deliverables?: string[];
+    reporting_contract?: string;
+  },
 ) {
   return [
     `You are ${worker.name}, the ${worker.role} on a CALL-CODEX call.`,
@@ -489,6 +516,16 @@ function workerInstructions(
     "When you report back, be concise, concrete, and include blockers early.",
     "",
     `Brief: ${worker.brief}`,
+    worker.capabilities?.length
+      ? `Capabilities: ${worker.capabilities.join(", ")}`
+      : "",
+    worker.allowed_scope ? `Allowed scope: ${worker.allowed_scope}` : "",
+    worker.deliverables?.length
+      ? `Deliverables: ${worker.deliverables.join("; ")}`
+      : "",
+    worker.reporting_contract
+      ? `Reporting contract: ${worker.reporting_contract}`
+      : "Reporting contract: report status, changed files, tests run, blockers, and next handoff.",
   ].join("\n");
 }
 
@@ -502,6 +539,13 @@ async function startWorkerThreads(input: {
     name: string;
     role: string;
     brief: string;
+    capabilities?: string[];
+    allowed_scope?: string;
+    model?: string;
+    reasoning_effort?: string;
+    permissions?: Record<string, unknown>;
+    deliverables?: string[];
+    reporting_contract?: string;
     worktree_path?: string;
     branch_name?: string;
   }>;
@@ -553,12 +597,20 @@ async function startWorkerThreads(input: {
           ? await client.forkThread({
               threadId: input.mainThreadId!,
               cwd: workerCwd,
+              model: worker.model,
+              config: worker.reasoning_effort
+                ? { reasoning_effort: worker.reasoning_effort }
+                : undefined,
               developerInstructions,
               ephemeral: false,
               persistExtendedHistory: true,
             })
           : await client.startThread({
               cwd: workerCwd,
+              model: worker.model,
+              config: worker.reasoning_effort
+                ? { reasoning_effort: worker.reasoning_effort }
+                : undefined,
               developerInstructions,
               ephemeral: false,
               experimentalRawEvents: false,

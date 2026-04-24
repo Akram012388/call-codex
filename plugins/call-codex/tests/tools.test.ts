@@ -351,6 +351,44 @@ describe("CALL-CODEX scaffold tools", () => {
     }
   });
 
+  test("persists first-class worker role contracts", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const created = await handleToolCall("call_create", {
+      title: "Contract call",
+      mode: "fork",
+      workers: [
+        {
+          name: "reviewer",
+          role: "reviewer",
+          brief: "review the mission",
+          capabilities: ["code review", "tests"],
+          allowed_scope: "plugins/call-codex only",
+          model: "gpt-test",
+          reasoning_effort: "high",
+          permissions: { write: false },
+          deliverables: ["findings", "risk notes"],
+          reporting_contract: "Report findings first, then tests.",
+        },
+      ],
+    });
+    const participant =
+      "participants" in created ? created.participants?.[0] : null;
+
+    expect(created.ok).toBe(true);
+    expect(participant?.capabilities_json).toBe(
+      JSON.stringify(["code review", "tests"]),
+    );
+    expect(participant?.allowed_scope).toBe("plugins/call-codex only");
+    expect(participant?.model).toBe("gpt-test");
+    expect(participant?.reasoning_effort).toBe("high");
+    expect(participant?.deliverables_json).toBe(
+      JSON.stringify(["findings", "risk notes"]),
+    );
+    expect(participant?.reporting_contract).toBe(
+      "Report findings first, then tests.",
+    );
+  });
+
   test("records messages and exports a transcript", async () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
     const created = await handleToolCall("call_create", {
