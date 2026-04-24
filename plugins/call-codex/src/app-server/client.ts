@@ -66,6 +66,7 @@ type ServerResponse = {
 
 export type AppServerClientOptions = {
   requestTimeoutMs?: number;
+  headers?: Record<string, string>;
 };
 
 export type AppServerNotificationHandler = (
@@ -79,19 +80,27 @@ export class AppServerClient {
   private notificationHandlers = new Set<AppServerNotificationHandler>();
   private initialized = false;
   private readonly requestTimeoutMs: number;
+  private readonly headers?: Record<string, string>;
 
   constructor(
     private readonly url: string,
     options: AppServerClientOptions = {},
   ) {
     this.requestTimeoutMs = options.requestTimeoutMs ?? 10_000;
+    this.headers = options.headers;
   }
 
   async connect() {
     if (this.ws?.readyState === WebSocket.OPEN) return;
 
     this.ws = await new Promise<WebSocket>((resolve, reject) => {
-      const socket = new WebSocket(this.url);
+      const WebSocketClient = WebSocket as unknown as new (
+        url: string,
+        options?: { headers?: Record<string, string> },
+      ) => WebSocket;
+      const socket = this.headers
+        ? new WebSocketClient(this.url, { headers: this.headers })
+        : new WebSocketClient(this.url);
       const timer = setTimeout(() => {
         socket.close();
         reject(

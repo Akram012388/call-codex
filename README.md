@@ -50,6 +50,8 @@ No `orchestration_create`. No lab-coat verbs. We are calling Codex.
 CALL-CODEX is designed to be local-first:
 
 - The managed app-server binds only to `127.0.0.1`.
+- Visible Codex macOS worker threads require the host runtime to expose
+  `CODEX_NATIVE_APP_SERVER_URL`.
 - Worker traffic is scoped to a call and project.
 - SQLite lives under `~/.codex/call-codex/`.
 - Messages are injected into Codex threads and persisted for audit.
@@ -74,6 +76,8 @@ The repo-local plugin lives under `plugins/call-codex` with a Codex manifest, lo
 `call_boot` can start a managed loopback Codex app-server, and the SQLite call board is wired for local calls, participants, messages, status, and transcripts.
 
 `call_create` is worktree-first by default: each worker gets a Git worktree, a branch, a named Codex thread, an initial worker turn, and a first-class worker contract. Worker threads are created against the parent project cwd for macOS visibility, while worker turns execute inside their dedicated worktrees. `fresh` and `fork` remain available when a shared cwd is intentional. `call_send` and `call_broadcast` inject call-line messages into workers with `thread/inject_items` when a participant has a thread ID.
+
+For `visibility: "macos_app"`, CALL-CODEX now consumes a strict native bridge contract: `CODEX_NATIVE_APP_SERVER_URL=ws://127.0.0.1:<port>`, with optional bearer-token auth via `CODEX_NATIVE_APP_SERVER_AUTH_TOKEN_FILE`. If the host does not expose that bridge, visible worker creation fails clearly instead of creating invisible managed sessions and calling them revealed. `visibility: "background"` remains available for managed loopback workers.
 
 `call_wake`, `call_steer`, and `call_interrupt` keep active missions moving through `turn/start`, `turn/steer`, and `turn/interrupt`, with active turn IDs tracked on the local board.
 

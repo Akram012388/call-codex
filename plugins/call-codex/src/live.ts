@@ -2,6 +2,7 @@ import type { ServerNotification } from "./app-server/generated/ServerNotificati
 import type { ThreadItem } from "./app-server/generated/v2/ThreadItem";
 import type { Turn } from "./app-server/generated/v2/Turn";
 import { AppServerClient } from "./app-server/client";
+import type { AppServerAuth } from "./app-server/manager";
 
 type LiveTurn = {
   id: string;
@@ -16,6 +17,7 @@ type LiveTurn = {
 
 type LiveMonitor = {
   url: string;
+  authKey: string;
   client: AppServerClient;
   ready: Promise<unknown>;
 };
@@ -154,14 +156,27 @@ export function handleLiveNotification(notification: ServerNotification) {
   }
 }
 
-export function ensureLiveMonitor(url: string) {
-  const existing = monitors.get(url);
-  if (existing) return existing;
+function liveAuthKey(auth?: AppServerAuth) {
+  return auth?.headers.Authorization ? "native-auth" : "none";
+}
 
-  const client = new AppServerClient(url, { requestTimeoutMs: 15_000 });
+export function ensureLiveMonitor(url: string, auth?: AppServerAuth) {
+  const existing = monitors.get(url);
+  const authKey = liveAuthKey(auth);
+  if (existing?.authKey === authKey) return existing;
+  if (existing) {
+    existing.client.close();
+    monitors.delete(url);
+  }
+
+  const client = new AppServerClient(url, {
+    requestTimeoutMs: 15_000,
+    headers: auth?.headers,
+  });
   client.onNotification(handleLiveNotification);
   const monitor = {
     url,
+    authKey,
     client,
     ready: client.initialize(),
   };

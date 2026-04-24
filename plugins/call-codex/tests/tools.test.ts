@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { mkdirSync } from "node:fs";
+import { mkdirSync, writeFileSync } from "node:fs";
 import {
   getDb,
   resetDbForTests,
@@ -13,6 +13,7 @@ import { handleToolCall, toolDefinitions } from "../src/tools";
 
 function fakeControlAppServer() {
   const calls: Array<{ method: string; params: unknown }> = [];
+  const authHeaders: Array<string | null> = [];
   const sockets = new Set<{ send: (message: string) => void }>();
   const broadcast = (message: unknown) => {
     for (const socket of sockets) {
@@ -22,6 +23,7 @@ function fakeControlAppServer() {
   const server = Bun.serve({
     port: 0,
     fetch(request, server) {
+      authHeaders.push(request.headers.get("authorization"));
       if (server.upgrade(request)) return;
       return new Response("CALL-CODEX fake control app-server");
     },
@@ -206,7 +208,7 @@ function fakeControlAppServer() {
     },
   });
 
-  return { server, calls };
+  return { server, calls, authHeaders };
 }
 
 function fakeFailingReadAppServer() {
@@ -316,6 +318,10 @@ function git(args: string[], cwd: string) {
 describe("CALL-CODEX scaffold tools", () => {
   beforeEach(() => {
     delete process.env.CALL_CODEX_APP_SERVER_URL;
+    delete process.env.CALL_CODEX_APP_SERVER_BACKEND;
+    delete process.env.CODEX_NATIVE_APP_SERVER_URL;
+    delete process.env.CODEX_NATIVE_APP_SERVER_BACKEND;
+    delete process.env.CODEX_NATIVE_APP_SERVER_AUTH_TOKEN_FILE;
     resetLiveStateForTests();
   });
 
@@ -356,13 +362,14 @@ describe("CALL-CODEX scaffold tools", () => {
   test("prefers a native Codex app-server URL when one is exposed", async () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
     const { server } = fakeControlAppServer();
-    process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
+    process.env.CODEX_NATIVE_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
 
     try {
       const boot = await handleToolCall("call_boot", {});
       const result = boot as {
         app_server?: {
           backend?: string;
+          discovery_source?: string;
           managed?: boolean;
           macos_app_visible_backend?: boolean;
         };
@@ -370,10 +377,98 @@ describe("CALL-CODEX scaffold tools", () => {
 
       expect(boot.ok).toBe(true);
       expect(result.app_server?.backend).toBe("macos_app");
+      expect(result.app_server?.discovery_source).toBe("native_env");
       expect(result.app_server?.managed).toBe(false);
       expect(result.app_server?.macos_app_visible_backend).toBe(true);
     } finally {
+      delete process.env.CODEX_NATIVE_APP_SERVER_URL;
+      server.stop(true);
+    }
+  });
+
+  test("sends native app-server auth from the host token file", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const { server, authHeaders } = fakeControlAppServer();
+    const tokenFile = join(tmpdir(), `call-codex-token-${crypto.randomUUID()}`);
+    writeFileSync(tokenFile, "bridge-secret\n");
+    process.env.CODEX_NATIVE_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
+    process.env.CODEX_NATIVE_APP_SERVER_AUTH_TOKEN_FILE = tokenFile;
+
+    try {
+      const boot = await handleToolCall("call_boot", {});
+      const result = boot as {
+        app_server?: {
+          auth?: { enabled?: boolean; source?: string };
+        };
+      };
+
+      expect(boot.ok).toBe(true);
+      expect(result.app_server?.auth).toEqual({
+        enabled: true,
+        source: "native_token_file",
+      });
+      expect(authHeaders).toContain("Bearer bridge-secret");
+    } finally {
+      delete process.env.CODEX_NATIVE_APP_SERVER_URL;
+      delete process.env.CODEX_NATIVE_APP_SERVER_AUTH_TOKEN_FILE;
+      server.stop(true);
+    }
+  });
+
+  test("does not treat an untagged dev override as a native bridge", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const { server } = fakeControlAppServer();
+    process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
+
+    try {
+      const created = await handleToolCall("call_create", {
+        title: "Dev override",
+        mode: "fresh",
+        workers: [{ name: "visible", role: "worker", brief: "show in app" }],
+      });
+      const result = created as {
+        app_server?: {
+          backend?: string;
+          worker_threads_created?: boolean;
+          message?: string;
+        };
+      };
+
+      expect(created.ok).toBe(true);
+      expect(result.app_server?.worker_threads_created).toBe(false);
+      expect(result.app_server?.backend).toBe("unavailable");
+      expect(result.app_server?.message).toContain(
+        "CODEX_NATIVE_APP_SERVER_URL",
+      );
+    } finally {
       delete process.env.CALL_CODEX_APP_SERVER_URL;
+      server.stop(true);
+    }
+  });
+
+  test("allows a tagged dev override to act as a native bridge", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const { server } = fakeControlAppServer();
+    process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
+    process.env.CALL_CODEX_APP_SERVER_BACKEND = "macos_app";
+
+    try {
+      const boot = await handleToolCall("call_boot", {});
+      const result = boot as {
+        app_server?: {
+          backend?: string;
+          discovery_source?: string;
+          macos_app_visible_backend?: boolean;
+        };
+      };
+
+      expect(boot.ok).toBe(true);
+      expect(result.app_server?.backend).toBe("macos_app");
+      expect(result.app_server?.discovery_source).toBe("dev_override");
+      expect(result.app_server?.macos_app_visible_backend).toBe(true);
+    } finally {
+      delete process.env.CALL_CODEX_APP_SERVER_URL;
+      delete process.env.CALL_CODEX_APP_SERVER_BACKEND;
       server.stop(true);
     }
   });
@@ -414,7 +509,7 @@ describe("CALL-CODEX scaffold tools", () => {
     git(["commit", "-m", "init"], repo);
 
     const { server, calls } = fakeControlAppServer();
-    process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
+    process.env.CODEX_NATIVE_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
     upsertRuntime({
       url: `ws://127.0.0.1:${server.port}`,
       pid: process.pid,
@@ -470,7 +565,7 @@ describe("CALL-CODEX scaffold tools", () => {
         cwd: result.app_server?.worktrees?.[0]?.path,
       });
     } finally {
-      delete process.env.CALL_CODEX_APP_SERVER_URL;
+      delete process.env.CODEX_NATIVE_APP_SERVER_URL;
       server.stop(true);
     }
   });
@@ -516,7 +611,7 @@ describe("CALL-CODEX scaffold tools", () => {
   test("keeps call_create alive when worker thread starts fail", async () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
     const { server } = fakeFailingStartAppServer();
-    process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
+    process.env.CODEX_NATIVE_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
     upsertRuntime({
       url: `ws://127.0.0.1:${server.port}`,
       pid: process.pid,
@@ -542,7 +637,7 @@ describe("CALL-CODEX scaffold tools", () => {
       expect(result.app_server?.failures?.[0]?.error).toContain("start failed");
       expect(result.participants?.[0]?.status).toBe("failed");
     } finally {
-      delete process.env.CALL_CODEX_APP_SERVER_URL;
+      delete process.env.CODEX_NATIVE_APP_SERVER_URL;
       server.stop(true);
     }
   });
@@ -646,7 +741,7 @@ describe("CALL-CODEX scaffold tools", () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
     process.env.CALL_CODEX_REVEAL_DRY_RUN = "1";
     const { server, calls } = fakeControlAppServer();
-    process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
+    process.env.CODEX_NATIVE_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
     upsertRuntime({
       url: `ws://127.0.0.1:${server.port}`,
       pid: process.pid,
@@ -689,7 +784,7 @@ describe("CALL-CODEX scaffold tools", () => {
         "thread/name/set",
       ]);
     } finally {
-      delete process.env.CALL_CODEX_APP_SERVER_URL;
+      delete process.env.CODEX_NATIVE_APP_SERVER_URL;
       delete process.env.CALL_CODEX_REVEAL_DRY_RUN;
       server.stop(true);
     }

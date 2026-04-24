@@ -24,8 +24,22 @@ bun test
 ## Safety Defaults
 
 - Managed app-server binds to `127.0.0.1`.
+- Sidebar-visible macOS workers require a host-provided native bridge:
+  `CODEX_NATIVE_APP_SERVER_URL=ws://127.0.0.1:<port>`.
 - `call_create` defaults to one Git worktree per worker.
 - SQLite receipts live under `~/.codex/call-codex/`.
 - Worker cleanup is explicit through `call_remove_thread`, `call_cancel`, or `call_close`.
+
+## Native macOS Bridge
+
+`visibility: "macos_app"` only uses the Codex macOS app's native app-server
+when the plugin runtime exposes `CODEX_NATIVE_APP_SERVER_URL`. If the host also
+sets `CODEX_NATIVE_APP_SERVER_AUTH_TOKEN_FILE`, CALL-CODEX reads the token
+ephemerally and sends it as a WebSocket bearer token without persisting it.
+
+`CALL_CODEX_APP_SERVER_URL` remains a dev/test override. It is treated as
+macOS-visible only when `CALL_CODEX_APP_SERVER_BACKEND=macos_app` is also set.
+Otherwise, CALL-CODEX keeps the honest split: native visibility fails clearly,
+while `visibility: "background"` can still use managed loopback workers.
 
 Dial carefully. Build boldly.

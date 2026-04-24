@@ -23,7 +23,10 @@ import {
   updateCall,
   upsertWorkerTranscriptItems,
 } from "./bus";
-import { bootManagedAppServer } from "./app-server/manager";
+import {
+  bootManagedAppServer,
+  type AppServerAuth,
+} from "./app-server/manager";
 import {
   AppServerClient,
   textUserInput,
@@ -528,9 +531,10 @@ async function withTimeout<T>(
   }
 }
 
-function appServerClient(url: string) {
+function appServerClient(url: string, auth?: AppServerAuth) {
   return new AppServerClient(url, {
     requestTimeoutMs: APP_SERVER_REQUEST_TIMEOUT_MS,
+    headers: auth?.headers,
   });
 }
 
@@ -653,6 +657,7 @@ async function startWorkerThreads(input: {
       mode: input.mode,
       visibility: input.visibility,
       backend: "unavailable",
+      discovery_source: "unavailable",
       macos_app_visible_backend: false,
       message,
       failures: input.workers.map((worker) => ({
@@ -678,6 +683,7 @@ async function startWorkerThreads(input: {
       mode: input.mode,
       visibility: input.visibility,
       backend: boot.backend,
+      discovery_source: boot.discovery.source,
       macos_app_visible_backend: boot.backend === "macos_app",
       message:
         "Worktree mode needs a Git repo and clean worktree paths before CALL-CODEX can park worker threads.",
@@ -686,7 +692,7 @@ async function startWorkerThreads(input: {
   }
 
   const runtime = requireRuntime(boot.runtime);
-  const client = appServerClient(runtime.url);
+  const client = appServerClient(runtime.url, boot.auth);
   const workers = [];
   const failures = [];
 
@@ -795,7 +801,11 @@ async function startWorkerThreads(input: {
     mode: input.mode,
     visibility: input.visibility,
     backend: boot.backend,
+    discovery_source: boot.discovery.source,
     macos_app_visible_backend: boot.backend === "macos_app",
+    auth: boot.auth
+      ? { enabled: true, source: boot.auth.source }
+      : { enabled: false },
     runtime: getRuntime(),
     worktrees,
     workers,
@@ -1125,13 +1135,14 @@ async function revealParticipants(input: {
         : undefined,
       revealed: false,
       reveal_strategy: "native_app_server_required",
+      discovery_source: boot.discovery.source,
       reason:
         "Worker was created by the managed background app-server, so the Codex macOS app did not register it as a visible sidebar conversation.",
     }));
   }
 
   const runtime = requireRuntime(boot.runtime);
-  const client = appServerClient(runtime.url);
+  const client = appServerClient(runtime.url, boot.auth);
 
   try {
     const results = [];
@@ -1286,8 +1297,8 @@ async function importWorkerTranscriptSections(
 
   const boot = await bootManagedAppServer();
   const runtime = requireRuntime(boot.runtime);
-  ensureLiveMonitor(runtime.url);
-  const client = appServerClient(runtime.url);
+  ensureLiveMonitor(runtime.url, boot.auth);
+  const client = appServerClient(runtime.url, boot.auth);
   const sections: WorkerTranscriptSection[] = [];
 
   try {
@@ -1415,8 +1426,8 @@ async function refreshWorkerProgress(input: {
 
   const boot = await bootManagedAppServer();
   const runtime = requireRuntime(boot.runtime);
-  ensureLiveMonitor(runtime.url);
-  const client = appServerClient(runtime.url);
+  ensureLiveMonitor(runtime.url, boot.auth);
+  const client = appServerClient(runtime.url, boot.auth);
   const workers = [];
   const autoCleared = [];
 
@@ -1546,7 +1557,7 @@ async function interruptActiveParticipants(input: {
 
   const boot = await bootManagedAppServer();
   const runtime = requireRuntime(boot.runtime);
-  const client = appServerClient(runtime.url);
+  const client = appServerClient(runtime.url, boot.auth);
   const interrupted = [];
 
   try {
@@ -1593,7 +1604,7 @@ export async function handleToolCall(name: string, args: unknown) {
         forceRestart: parsed.data.force_restart,
       });
       if (boot.runtime?.url) {
-        ensureLiveMonitor(boot.runtime.url);
+        ensureLiveMonitor(boot.runtime.url, boot.auth);
       }
       return {
         ok: true,
@@ -1606,8 +1617,12 @@ export async function handleToolCall(name: string, args: unknown) {
           ...boot.runtime,
           bind: "127.0.0.1",
           backend: boot.backend,
+          discovery_source: boot.discovery.source,
           managed: boot.backend === "managed",
           macos_app_visible_backend: boot.backend === "macos_app",
+          auth: boot.auth
+            ? { enabled: true, source: boot.auth.source }
+            : { enabled: false },
         },
         audit: {
           sqlite_path: getDbPath(),
@@ -1692,7 +1707,7 @@ export async function handleToolCall(name: string, args: unknown) {
       if (message && participant?.thread_id) {
         const boot = await bootManagedAppServer();
         const runtime = requireRuntime(boot.runtime);
-        const client = appServerClient(runtime.url);
+        const client = appServerClient(runtime.url, boot.auth);
         try {
           injection = await injectMessage(client, message, participant);
         } finally {
@@ -1732,7 +1747,7 @@ export async function handleToolCall(name: string, args: unknown) {
       if (hasThreads) {
         const boot = await bootManagedAppServer();
         const runtime = requireRuntime(boot.runtime);
-        const client = appServerClient(runtime.url);
+        const client = appServerClient(runtime.url, boot.auth);
         try {
           for (const message of messages) {
             if (!message) continue;
@@ -1835,7 +1850,7 @@ export async function handleToolCall(name: string, args: unknown) {
       if (parsed.data.archive_thread && participant.thread_id) {
         const boot = await bootManagedAppServer();
         const runtime = requireRuntime(boot.runtime);
-        const client = appServerClient(runtime.url);
+        const client = appServerClient(runtime.url, boot.auth);
         try {
           await client.archiveThread({ threadId: participant.thread_id });
           archive = { archived: true, error: null };
@@ -1890,8 +1905,8 @@ export async function handleToolCall(name: string, args: unknown) {
 
       const boot = await bootManagedAppServer();
       const runtime = requireRuntime(boot.runtime);
-      await ensureLiveMonitor(runtime.url).ready.catch(() => null);
-      const client = appServerClient(runtime.url);
+      await ensureLiveMonitor(runtime.url, boot.auth).ready.catch(() => null);
+      const client = appServerClient(runtime.url, boot.auth);
       const wakeups = [];
 
       try {
@@ -2000,7 +2015,7 @@ export async function handleToolCall(name: string, args: unknown) {
 
       const boot = await bootManagedAppServer();
       const runtime = requireRuntime(boot.runtime);
-      const client = appServerClient(runtime.url);
+      const client = appServerClient(runtime.url, boot.auth);
       const message = addMessage({
         callId: parsed.data.call_id,
         fromName: parsed.data.from,
