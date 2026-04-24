@@ -35,6 +35,9 @@ import type { WorkerTranscriptSection } from "./bus";
 import type { ThreadItem } from "./app-server/generated/v2/ThreadItem";
 
 const CACHE_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+const APP_SERVER_REQUEST_TIMEOUT_MS = 15_000;
+const WORKER_OPERATION_TIMEOUT_MS = 20_000;
+const STUCK_TURN_AFTER_MS = 30 * 60 * 1000;
 
 const prioritySchema = z
   .enum(["low", "normal", "high", "urgent"])
@@ -496,6 +499,66 @@ function requireRuntime(runtime: RuntimeState | null) {
   return runtime;
 }
 
+async function withTimeout<T>(
+  label: string,
+  promise: Promise<T>,
+  timeoutMs = WORKER_OPERATION_TIMEOUT_MS,
+) {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  try {
+    return await Promise.race([
+      promise,
+      new Promise<T>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`${label} timed out after ${timeoutMs} ms`)),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
+function appServerClient(url: string) {
+  return new AppServerClient(url, {
+    requestTimeoutMs: APP_SERVER_REQUEST_TIMEOUT_MS,
+  });
+}
+
+function participantHealth(participants: ParticipantRow[]) {
+  const nowMs = Date.now();
+  const active = participants.filter(
+    (participant) => participant.active_turn_id,
+  );
+  const stuck = active
+    .map((participant) => {
+      const startedMs = participant.active_turn_started_at
+        ? Date.parse(participant.active_turn_started_at)
+        : Number.NaN;
+      const age_ms = Number.isFinite(startedMs) ? nowMs - startedMs : null;
+      return {
+        participant: participant.name,
+        thread_id: participant.thread_id,
+        active_turn_id: participant.active_turn_id,
+        age_ms,
+        stale: age_ms === null ? true : age_ms > STUCK_TURN_AFTER_MS,
+      };
+    })
+    .filter((item) => item.stale);
+
+  return {
+    worker_count: participants.length,
+    active_count: active.length,
+    failed_count: participants.filter((item) => item.status === "failed")
+      .length,
+    blocked_count: participants.filter((item) => item.status === "blocked")
+      .length,
+    stuck_turns: stuck,
+    ok: stuck.length === 0,
+  };
+}
+
 function workerInstructions(
   callTitle: string,
   worker: {
@@ -581,60 +644,79 @@ async function startWorkerThreads(input: {
 
   const boot = await bootManagedAppServer();
   const runtime = requireRuntime(boot.runtime);
-  const client = new AppServerClient(runtime.url);
+  const client = appServerClient(runtime.url);
   const workers = [];
+  const failures = [];
 
   try {
     for (const worker of input.workers) {
-      const developerInstructions = workerInstructions(input.title, worker);
-      const worktree = worktrees.find((item) => item.name === worker.name);
-      const workerCwd =
-        input.mode === "worktree"
-          ? worktree?.path
-          : (input.cwd ?? process.cwd());
-      const started =
-        input.mode === "fork"
-          ? await client.forkThread({
-              threadId: input.mainThreadId!,
-              cwd: workerCwd,
-              model: worker.model,
-              config: worker.reasoning_effort
-                ? { reasoning_effort: worker.reasoning_effort }
-                : undefined,
-              developerInstructions,
-              ephemeral: false,
-              persistExtendedHistory: true,
-            })
-          : await client.startThread({
-              cwd: workerCwd,
-              model: worker.model,
-              config: worker.reasoning_effort
-                ? { reasoning_effort: worker.reasoning_effort }
-                : undefined,
-              developerInstructions,
-              ephemeral: false,
-              experimentalRawEvents: false,
-              persistExtendedHistory: true,
-            });
+      try {
+        const developerInstructions = workerInstructions(input.title, worker);
+        const worktree = worktrees.find((item) => item.name === worker.name);
+        const workerCwd =
+          input.mode === "worktree"
+            ? worktree?.path
+            : (input.cwd ?? process.cwd());
+        const startPromise =
+          input.mode === "fork"
+            ? client.forkThread({
+                threadId: input.mainThreadId!,
+                cwd: workerCwd,
+                model: worker.model,
+                config: worker.reasoning_effort
+                  ? { reasoning_effort: worker.reasoning_effort }
+                  : undefined,
+                developerInstructions,
+                ephemeral: false,
+                persistExtendedHistory: true,
+              })
+            : client.startThread({
+                cwd: workerCwd,
+                model: worker.model,
+                config: worker.reasoning_effort
+                  ? { reasoning_effort: worker.reasoning_effort }
+                  : undefined,
+                developerInstructions,
+                ephemeral: false,
+                experimentalRawEvents: false,
+                persistExtendedHistory: true,
+              });
+        const started = await withTimeout(
+          `starting worker ${worker.name}`,
+          startPromise,
+        );
 
-      const participant = setParticipantThreadId({
-        callId: input.callId,
-        name: worker.name,
-        threadId: started.thread.id,
-        cwd: workerCwd,
-        worktreePath: worktree?.path,
-        branchName: worktree?.branch,
-      });
+        const participant = setParticipantThreadId({
+          callId: input.callId,
+          name: worker.name,
+          threadId: started.thread.id,
+          cwd: workerCwd,
+          worktreePath: worktree?.path,
+          branchName: worktree?.branch,
+        });
 
-      workers.push({
-        name: worker.name,
-        role: worker.role,
-        thread_id: started.thread.id,
-        cwd: workerCwd,
-        worktree_path: worktree?.path ?? "",
-        branch_name: worktree?.branch ?? "",
-        status: participant?.status ?? "running",
-      });
+        workers.push({
+          name: worker.name,
+          role: worker.role,
+          thread_id: started.thread.id,
+          cwd: workerCwd,
+          worktree_path: worktree?.path ?? "",
+          branch_name: worktree?.branch ?? "",
+          status: participant?.status ?? "running",
+        });
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        updateCall({
+          callId: input.callId,
+          participant: worker.name,
+          status: "failed",
+          blocker: message,
+        });
+        failures.push({
+          name: worker.name,
+          error: message,
+        });
+      }
     }
   } finally {
     client.close();
@@ -647,6 +729,7 @@ async function startWorkerThreads(input: {
     runtime: getRuntime(),
     worktrees,
     workers,
+    failures,
   };
 }
 
@@ -955,7 +1038,7 @@ async function revealParticipants(input: {
 
   const boot = await bootManagedAppServer();
   const runtime = requireRuntime(boot.runtime);
-  const client = new AppServerClient(runtime.url);
+  const client = appServerClient(runtime.url);
 
   try {
     const results = [];
@@ -1111,7 +1194,7 @@ async function importWorkerTranscriptSections(
   const boot = await bootManagedAppServer();
   const runtime = requireRuntime(boot.runtime);
   ensureLiveMonitor(runtime.url);
-  const client = new AppServerClient(runtime.url);
+  const client = appServerClient(runtime.url);
   const sections: WorkerTranscriptSection[] = [];
 
   try {
@@ -1240,7 +1323,7 @@ async function refreshWorkerProgress(input: {
   const boot = await bootManagedAppServer();
   const runtime = requireRuntime(boot.runtime);
   ensureLiveMonitor(runtime.url);
-  const client = new AppServerClient(runtime.url);
+  const client = appServerClient(runtime.url);
   const workers = [];
   const autoCleared = [];
 
@@ -1370,7 +1453,7 @@ async function interruptActiveParticipants(input: {
 
   const boot = await bootManagedAppServer();
   const runtime = requireRuntime(boot.runtime);
-  const client = new AppServerClient(runtime.url);
+  const client = appServerClient(runtime.url);
   const interrupted = [];
 
   try {
@@ -1500,7 +1583,7 @@ export async function handleToolCall(name: string, args: unknown) {
       if (message && participant?.thread_id) {
         const boot = await bootManagedAppServer();
         const runtime = requireRuntime(boot.runtime);
-        const client = new AppServerClient(runtime.url);
+        const client = appServerClient(runtime.url);
         try {
           injection = await injectMessage(client, message, participant);
         } finally {
@@ -1540,7 +1623,7 @@ export async function handleToolCall(name: string, args: unknown) {
       if (hasThreads) {
         const boot = await bootManagedAppServer();
         const runtime = requireRuntime(boot.runtime);
-        const client = new AppServerClient(runtime.url);
+        const client = appServerClient(runtime.url);
         try {
           for (const message of messages) {
             if (!message) continue;
@@ -1643,7 +1726,7 @@ export async function handleToolCall(name: string, args: unknown) {
       if (parsed.data.archive_thread && participant.thread_id) {
         const boot = await bootManagedAppServer();
         const runtime = requireRuntime(boot.runtime);
-        const client = new AppServerClient(runtime.url);
+        const client = appServerClient(runtime.url);
         try {
           await client.archiveThread({ threadId: participant.thread_id });
           archive = { archived: true, error: null };
@@ -1699,7 +1782,7 @@ export async function handleToolCall(name: string, args: unknown) {
       const boot = await bootManagedAppServer();
       const runtime = requireRuntime(boot.runtime);
       await ensureLiveMonitor(runtime.url).ready.catch(() => null);
-      const client = new AppServerClient(runtime.url);
+      const client = appServerClient(runtime.url);
       const wakeups = [];
 
       try {
@@ -1808,7 +1891,7 @@ export async function handleToolCall(name: string, args: unknown) {
 
       const boot = await bootManagedAppServer();
       const runtime = requireRuntime(boot.runtime);
-      const client = new AppServerClient(runtime.url);
+      const client = appServerClient(runtime.url);
       const message = addMessage({
         callId: parsed.data.call_id,
         fromName: parsed.data.from,
@@ -1945,6 +2028,7 @@ export async function handleToolCall(name: string, args: unknown) {
         ok: true,
         tool: name,
         runtime: getRuntime(),
+        health: participantHealth(bundle.participants),
         worker_progress: workerProgress,
         ...bundle,
       };

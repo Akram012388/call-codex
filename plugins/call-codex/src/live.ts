@@ -20,6 +20,8 @@ type LiveMonitor = {
   ready: Promise<unknown>;
 };
 
+const MAX_TURNS_PER_THREAD = 20;
+
 const monitors = new Map<string, LiveMonitor>();
 const turnsByThread = new Map<string, Map<string, LiveTurn>>();
 
@@ -53,6 +55,7 @@ function upsertTurn(threadId: string, turn: Turn) {
   const turns = getThreadTurns(threadId);
   const liveTurn = turnFromAppServer(threadId, turn);
   turns.set(turn.id, liveTurn);
+  pruneThreadTurns(turns);
   return liveTurn;
 }
 
@@ -71,8 +74,19 @@ function ensureTurn(threadId: string, turnId: string): LiveTurn {
       updated_at: stamp(),
     };
     turns.set(turnId, turn);
+    pruneThreadTurns(turns);
   }
   return turn;
+}
+
+function pruneThreadTurns(turns: Map<string, LiveTurn>) {
+  if (turns.size <= MAX_TURNS_PER_THREAD) return;
+  const ordered = [...turns.values()].sort(
+    (a, b) => Date.parse(a.updated_at) - Date.parse(b.updated_at),
+  );
+  for (const turn of ordered.slice(0, turns.size - MAX_TURNS_PER_THREAD)) {
+    turns.delete(turn.id);
+  }
 }
 
 function upsertItem(turn: LiveTurn, item: ThreadItem) {
@@ -144,7 +158,7 @@ export function ensureLiveMonitor(url: string) {
   const existing = monitors.get(url);
   if (existing) return existing;
 
-  const client = new AppServerClient(url);
+  const client = new AppServerClient(url, { requestTimeoutMs: 15_000 });
   client.onNotification(handleLiveNotification);
   const monitor = {
     url,

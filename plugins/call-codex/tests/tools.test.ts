@@ -259,6 +259,53 @@ function fakeFailingReadAppServer() {
   return { server, calls };
 }
 
+function fakeFailingStartAppServer() {
+  const calls: Array<{ method: string; params: unknown }> = [];
+  const server = Bun.serve({
+    port: 0,
+    fetch(request, server) {
+      if (server.upgrade(request)) return;
+      return new Response("CALL-CODEX fake failing start app-server");
+    },
+    websocket: {
+      message(ws, message) {
+        const request = JSON.parse(String(message)) as {
+          id: number;
+          method: string;
+          params: unknown;
+        };
+        calls.push({ method: request.method, params: request.params });
+
+        if (request.method === "initialize") {
+          ws.send(
+            JSON.stringify({
+              id: request.id,
+              result: {
+                userAgent: "fake-codex",
+                codexHome: "/tmp/call-codex",
+                platformFamily: "unix",
+                platformOs: "macos",
+              },
+            }),
+          );
+          return;
+        }
+
+        if (request.method === "thread/start") {
+          ws.send(
+            JSON.stringify({
+              id: request.id,
+              error: { code: -32000, message: "start failed" },
+            }),
+          );
+        }
+      },
+    },
+  });
+
+  return { server, calls };
+}
+
 function git(args: string[], cwd: string) {
   const result = Bun.spawnSync(["git", ...args], { cwd });
   if (result.exitCode !== 0) {
@@ -387,6 +434,38 @@ describe("CALL-CODEX scaffold tools", () => {
     expect(participant?.reporting_contract).toBe(
       "Report findings first, then tests.",
     );
+  });
+
+  test("keeps call_create alive when worker thread starts fail", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const { server } = fakeFailingStartAppServer();
+    upsertRuntime({
+      url: `ws://127.0.0.1:${server.port}`,
+      pid: process.pid,
+      status: "running",
+    });
+
+    try {
+      const created = await handleToolCall("call_create", {
+        title: "Failure call",
+        mode: "fresh",
+        workers: [{ name: "fragile", role: "worker", brief: "try to start" }],
+      });
+      const result = created as {
+        app_server?: {
+          worker_threads_created?: boolean;
+          failures?: Array<{ name: string; error: string }>;
+        };
+        participants?: Array<{ status: string; current_task: string }>;
+      };
+
+      expect(created.ok).toBe(true);
+      expect(result.app_server?.worker_threads_created).toBe(false);
+      expect(result.app_server?.failures?.[0]?.error).toContain("start failed");
+      expect(result.participants?.[0]?.status).toBe("failed");
+    } finally {
+      server.stop(true);
+    }
   });
 
   test("records messages and exports a transcript", async () => {
@@ -607,6 +686,7 @@ describe("CALL-CODEX scaffold tools", () => {
       await Bun.sleep(10);
       const status = await handleToolCall("call_status", { call_id: callId });
       const statusResult = status as {
+        health?: { ok: boolean; active_count: number };
         worker_progress?: {
           workers: Array<{
             latest_assistant_messages: Array<{ text: string }>;
@@ -619,6 +699,8 @@ describe("CALL-CODEX scaffold tools", () => {
 
       expect(wake.ok).toBe(true);
       expect(status.ok).toBe(true);
+      expect(statusResult.health?.ok).toBe(true);
+      expect(statusResult.health?.active_count).toBe(0);
       expect(
         statusResult.worker_progress
           ? statusResult.worker_progress.workers[0]
