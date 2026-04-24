@@ -7,6 +7,25 @@ export type BootOptions = {
   forceRestart?: boolean;
 };
 
+export type AppServerBackend = "macos_app" | "managed";
+
+const APP_SERVER_URL_ENV_KEYS = [
+  "CALL_CODEX_APP_SERVER_URL",
+  "CODEX_APP_SERVER_URL",
+  "CODEX_APP_SERVER_WEBSOCKET_URL",
+  "CODEX_LOCAL_APP_SERVER_URL",
+];
+
+function getNativeAppServerUrl() {
+  for (const key of APP_SERVER_URL_ENV_KEYS) {
+    const value = process.env[key]?.trim();
+    if (value?.startsWith("ws://127.0.0.1:")) {
+      return value;
+    }
+  }
+  return null;
+}
+
 function isProcessAlive(pid: number | null | undefined) {
   if (!pid) return false;
   try {
@@ -76,6 +95,18 @@ async function waitForWebSocket(url: string, timeoutMs = 5000) {
 }
 
 export async function bootManagedAppServer(options: BootOptions = {}) {
+  if (!options.forceRestart) {
+    const nativeUrl = getNativeAppServerUrl();
+    if (nativeUrl) {
+      await waitForWebSocket(nativeUrl, 1200);
+      return {
+        reused: true,
+        backend: "macos_app" as AppServerBackend,
+        runtime: upsertRuntime({ url: nativeUrl, pid: null, status: "running" })
+      };
+    }
+  }
+
   const existing = getRuntime();
   if (options.forceRestart) {
     killProcess(existing?.pid);
@@ -84,6 +115,7 @@ export async function bootManagedAppServer(options: BootOptions = {}) {
       await waitForWebSocket(existing.url, 1200);
       return {
         reused: true,
+        backend: "managed" as AppServerBackend,
         runtime: upsertRuntime({ url: existing.url, pid: existing.pid, status: "running" })
       };
     } catch {
@@ -104,6 +136,7 @@ export async function bootManagedAppServer(options: BootOptions = {}) {
 
   return {
     reused: false,
+    backend: "managed" as AppServerBackend,
     runtime: upsertRuntime({ url, pid: child.pid ?? null, status: "running" })
   };
 }

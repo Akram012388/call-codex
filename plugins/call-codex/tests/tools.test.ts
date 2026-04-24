@@ -315,6 +315,7 @@ function git(args: string[], cwd: string) {
 
 describe("CALL-CODEX scaffold tools", () => {
   beforeEach(() => {
+    delete process.env.CALL_CODEX_APP_SERVER_URL;
     resetLiveStateForTests();
   });
 
@@ -350,6 +351,31 @@ describe("CALL-CODEX scaffold tools", () => {
     expect(result.ok).toBe(true);
     expect(result.tool).toBe("call_create");
     expect("status" in result ? result.status : undefined).toBe("created");
+  });
+
+  test("prefers a native Codex app-server URL when one is exposed", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const { server } = fakeControlAppServer();
+    process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
+
+    try {
+      const boot = await handleToolCall("call_boot", {});
+      const result = boot as {
+        app_server?: {
+          backend?: string;
+          managed?: boolean;
+          macos_app_visible_backend?: boolean;
+        };
+      };
+
+      expect(boot.ok).toBe(true);
+      expect(result.app_server?.backend).toBe("macos_app");
+      expect(result.app_server?.managed).toBe(false);
+      expect(result.app_server?.macos_app_visible_backend).toBe(true);
+    } finally {
+      delete process.env.CALL_CODEX_APP_SERVER_URL;
+      server.stop(true);
+    }
   });
 
   test("creates worker threads in first-class git worktrees by default", async () => {

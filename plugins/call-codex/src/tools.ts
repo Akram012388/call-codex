@@ -751,6 +751,7 @@ async function startWorkerThreads(input: {
     worker_threads_created: workers.length > 0,
     requires_main_thread_id: false,
     mode: input.mode,
+    backend: boot.backend,
     runtime: getRuntime(),
     worktrees,
     workers,
@@ -1014,21 +1015,29 @@ async function revealCodexThread(input: {
   }
 
   if (process.env.CALL_CODEX_REVEAL_DRY_RUN !== "1") {
-    const opened = Bun.spawn(["open", revealUrl], {
+    const opened = Bun.spawn(["open", "-a", "Codex", revealUrl], {
       stdout: "ignore",
       stderr: "ignore",
     });
     await opened.exited;
     if (opened.exitCode !== 0) {
-      return {
-        participant: input.participant.name,
-        thread_id: input.participant.thread_id,
-        reveal_url: revealUrl,
-        revealed: false,
-        name_set,
-        name_error,
-        reason: `macOS open exited with code ${opened.exitCode}.`,
-      };
+      const fallback = Bun.spawn(["open", revealUrl], {
+        stdout: "ignore",
+        stderr: "ignore",
+      });
+      await fallback.exited;
+      if (fallback.exitCode !== 0) {
+        return {
+          participant: input.participant.name,
+          thread_id: input.participant.thread_id,
+          reveal_url: revealUrl,
+          revealed: false,
+          name_set,
+          name_error,
+          reveal_strategy: "codex_app_deeplink",
+          reason: `macOS open exited with code ${opened.exitCode}; fallback exited with code ${fallback.exitCode}.`,
+        };
+      }
     }
   }
 
@@ -1039,6 +1048,7 @@ async function revealCodexThread(input: {
     revealed: true,
     name_set,
     name_error,
+    reveal_strategy: "codex_app_deeplink",
     title,
   };
 }
@@ -1537,7 +1547,9 @@ export async function handleToolCall(name: string, args: unknown) {
         app_server: {
           ...boot.runtime,
           bind: "127.0.0.1",
-          managed: true,
+          backend: boot.backend,
+          managed: boot.backend === "managed",
+          macos_app_visible_backend: boot.backend === "macos_app",
         },
         audit: {
           sqlite_path: getDbPath(),
