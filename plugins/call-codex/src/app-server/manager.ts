@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { createServer } from "node:net";
+import { homedir } from "node:os";
 import { getRuntime, upsertRuntime } from "../bus";
 
 export type BootOptions = {
@@ -93,6 +94,7 @@ export async function bootManagedAppServer(options: BootOptions = {}) {
   const port = await getFreePort();
   const url = `ws://127.0.0.1:${port}`;
   const child = spawn("codex", ["app-server", "--listen", url], {
+    cwd: homedir(),
     detached: true,
     stdio: "ignore"
   });
