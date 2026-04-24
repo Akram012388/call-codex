@@ -465,10 +465,11 @@ Status: implemented for the initial messaging lane. `call_create` creates real C
 - Import worker turn output into `call_transcript`.
 - Persist imported worker transcript items locally.
 - Surface live-vs-cache transcript metadata.
+- Label cached transcript output fresh or stale.
 - Tighten skill behavior.
 - Test through Codex macOS app.
 
-Status: partially implemented. Explicit worker control now supports `turn/start`, `turn/steer`, and `turn/interrupt`, with active turn IDs persisted on participants. `call_status` now reads active worker threads, reports recent assistant output, exposes terminal turn state, and auto-clears completed, failed, or interrupted turns. `call_transcript` imports worker turns into a markdown `Worker Output` section, caches imported items so later exports can survive unavailable worker threads, and returns metadata that marks live vs cached sources. Remaining polish is event subscriptions, stale-cache warnings, and full Codex macOS app smoke testing.
+Status: partially implemented. Explicit worker control now supports `turn/start`, `turn/steer`, and `turn/interrupt`, with active turn IDs persisted on participants. `call_status` now reads active worker threads, reports recent assistant output, exposes terminal turn state, and auto-clears completed, failed, or interrupted turns. `call_transcript` imports worker turns into a markdown `Worker Output` section, caches imported items so later exports can survive unavailable worker threads, and returns metadata that marks live vs cached sources, cache age, fresh/stale state, and live-read failures. Remaining polish is event subscriptions and full Codex macOS app smoke testing.
 
 ### Milestone 6: Public-Ready Plugin
 

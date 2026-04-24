@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import {
+  getDb,
   resetDbForTests,
   setParticipantThreadId,
   upsertRuntime,
@@ -419,6 +420,11 @@ describe("CALL-CODEX scaffold tools", () => {
           ? transcript.worker_transcript_metadata?.[0]?.source
           : "",
       ).toBe("live");
+      expect(
+        "worker_transcript_metadata" in transcript
+          ? transcript.worker_transcript_metadata?.[0]?.cache_state
+          : "",
+      ).toBe("fresh");
       expect(calls.map((call) => call.method)).toEqual([
         "initialize",
         "thread/inject_items",
@@ -452,6 +458,10 @@ describe("CALL-CODEX scaffold tools", () => {
         threadId: "thread-control",
       });
       await handleToolCall("call_transcript", { call_id: callId });
+      getDb().run(
+        "UPDATE worker_transcript_items SET imported_at = ? WHERE call_id = ?",
+        ["2000-01-01T00:00:00.000Z", callId],
+      );
     } finally {
       live.server.stop(true);
     }
@@ -482,10 +492,32 @@ describe("CALL-CODEX scaffold tools", () => {
           : false,
       ).toBe(true);
       expect(
+        "transcript" in transcript
+          ? transcript.transcript?.includes("- Cache: stale")
+          : false,
+      ).toBe(true);
+      expect(
+        "transcript" in transcript
+          ? transcript.transcript?.includes(
+              "- Live read error: thread unavailable",
+            )
+          : false,
+      ).toBe(true);
+      expect(
         "worker_transcript_metadata" in transcript
           ? transcript.worker_transcript_metadata?.[0]?.source
           : "",
       ).toBe("cache");
+      expect(
+        "worker_transcript_metadata" in transcript
+          ? transcript.worker_transcript_metadata?.[0]?.cache_state
+          : "",
+      ).toBe("stale");
+      expect(
+        "worker_transcript_metadata" in transcript
+          ? transcript.worker_transcript_metadata?.[0]?.live_read_error
+          : "",
+      ).toBe("thread unavailable");
       expect(
         "worker_transcript_metadata" in transcript
           ? transcript.worker_transcript_metadata?.[0]?.imported_at

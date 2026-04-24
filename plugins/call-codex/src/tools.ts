@@ -30,6 +30,8 @@ import type { WorkerTranscriptSection } from "./bus";
 import type { ThreadItem } from "./app-server/generated/v2/ThreadItem";
 import type { Turn } from "./app-server/generated/v2/Turn";
 
+const CACHE_STALE_AFTER_MS = 24 * 60 * 60 * 1000;
+
 const prioritySchema = z
   .enum(["low", "normal", "high", "urgent"])
   .default("normal");
@@ -649,6 +651,9 @@ function transcriptMetadata(sections: WorkerTranscriptSection[]) {
     thread_id: section.thread_id,
     source: section.source,
     imported_at: section.imported_at,
+    cache_state: section.cache_state,
+    cache_age_ms: section.cache_age_ms,
+    live_read_error: section.live_read_error ?? null,
     turn_count: section.turns.length,
     item_count: section.turns.reduce(
       (sum, turn) => sum + turn.entries.length,
@@ -656,6 +661,26 @@ function transcriptMetadata(sections: WorkerTranscriptSection[]) {
     ),
     error: section.error ?? null,
   }));
+}
+
+function annotateCacheSection(
+  section: WorkerTranscriptSection,
+  options: { nowMs?: number; liveReadError?: string } = {},
+) {
+  const nowMs = options.nowMs ?? Date.now();
+  const importedMs = section.imported_at
+    ? Date.parse(section.imported_at)
+    : Number.NaN;
+  const cacheAgeMs = Number.isFinite(importedMs) ? nowMs - importedMs : null;
+  return {
+    ...section,
+    cache_age_ms: cacheAgeMs,
+    cache_state:
+      cacheAgeMs !== null && cacheAgeMs > CACHE_STALE_AFTER_MS
+        ? ("stale" as const)
+        : ("fresh" as const),
+    live_read_error: options.liveReadError,
+  };
 }
 
 async function importWorkerTranscriptSections(
@@ -684,6 +709,8 @@ async function importWorkerTranscriptSections(
           thread_id: participant.thread_id,
           source: "live" as const,
           imported_at: new Date().toISOString(),
+          cache_state: "fresh" as const,
+          cache_age_ms: 0,
           turns: read.thread.turns.map((turn) => ({
             id: turn.id,
             status: turn.status,
@@ -701,13 +728,19 @@ async function importWorkerTranscriptSections(
           turns: section.turns,
         });
       } catch (error) {
+        const liveReadError =
+          error instanceof Error ? error.message : String(error);
         const cached = buildWorkerTranscriptSectionsFromCache(callId).find(
           (section) =>
             section.participant === participant.name &&
             section.thread_id === participant.thread_id,
         );
         if (cached) {
-          sections.push(cached);
+          sections.push(
+            annotateCacheSection(cached, {
+              liveReadError,
+            }),
+          );
           continue;
         }
 
@@ -716,8 +749,10 @@ async function importWorkerTranscriptSections(
           thread_id: participant.thread_id,
           source: "live",
           imported_at: null,
+          cache_state: "uncached",
+          cache_age_ms: null,
           turns: [],
-          error: error instanceof Error ? error.message : String(error),
+          error: liveReadError,
         });
       }
     }

@@ -667,6 +667,9 @@ export type WorkerTranscriptSection = {
   thread_id: string;
   source: "live" | "cache";
   imported_at: string | null;
+  cache_state: "fresh" | "stale" | "uncached";
+  cache_age_ms: number | null;
+  live_read_error?: string;
   turns: Array<{
     id: string;
     status: string;
@@ -696,6 +699,8 @@ export function buildWorkerTranscriptSectionsFromCache(
         thread_id: row.thread_id,
         source: "cache",
         imported_at: row.imported_at,
+        cache_state: "fresh",
+        cache_age_ms: null,
         turns: [],
       };
       sections.set(sectionKey, section);
@@ -771,7 +776,14 @@ export function buildTranscript(
         `- Thread: ${worker.thread_id}`,
         `- Source: ${worker.source}`,
         `- Imported: ${worker.imported_at ?? "not cached"}`,
+        `- Cache: ${worker.cache_state}`,
       );
+      if (worker.cache_age_ms !== null) {
+        lines.push(`- Cache age: ${worker.cache_age_ms} ms`);
+      }
+      if (worker.live_read_error) {
+        lines.push(`- Live read error: ${worker.live_read_error}`);
+      }
       if (worker.error) {
         lines.push(`- Import error: ${worker.error}`, "");
         continue;
