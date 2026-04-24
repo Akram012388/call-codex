@@ -664,7 +664,7 @@ async function startWorkerThreads(input: {
                 cwd: workerCwd,
                 model: worker.model,
                 config: worker.reasoning_effort
-                  ? { reasoning_effort: worker.reasoning_effort }
+                  ? { model_reasoning_effort: worker.reasoning_effort }
                   : undefined,
                 developerInstructions,
                 ephemeral: false,
@@ -674,7 +674,7 @@ async function startWorkerThreads(input: {
                 cwd: workerCwd,
                 model: worker.model,
                 config: worker.reasoning_effort
-                  ? { reasoning_effort: worker.reasoning_effort }
+                  ? { model_reasoning_effort: worker.reasoning_effort }
                   : undefined,
                 developerInstructions,
                 ephemeral: false,

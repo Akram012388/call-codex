@@ -374,7 +374,14 @@ describe("CALL-CODEX scaffold tools", () => {
       const created = await handleToolCall("call_create", {
         title: "Worktree call",
         cwd: repo,
-        workers: [{ name: "builder", role: "worker", brief: "build safely" }],
+        workers: [
+          {
+            name: "builder",
+            role: "worker",
+            brief: "build safely",
+            reasoning_effort: "low",
+          },
+        ],
       });
       const result = created as {
         app_server?: {
@@ -406,6 +413,9 @@ describe("CALL-CODEX scaffold tools", () => {
         "thread/name/set",
         "turn/start",
       ]);
+      expect(calls[1]?.params).toMatchObject({
+        config: { model_reasoning_effort: "low" },
+      });
     } finally {
       server.stop(true);
     }
