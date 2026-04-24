@@ -22,11 +22,13 @@ export type ParticipantStatus =
   | "cancelled"
   | "closed";
 
+export type CallMode = "worktree" | "fork" | "fresh";
+
 export type CallRow = {
   id: string;
   title: string;
   project: string;
-  mode: "fork" | "fresh";
+  mode: CallMode;
   status: CallStatus;
   summary: string;
   created_at: string;
@@ -41,6 +43,8 @@ export type ParticipantRow = {
   brief: string;
   thread_id: string;
   cwd: string;
+  worktree_path: string;
+  branch_name: string;
   status: ParticipantStatus;
   current_task: string;
   active_turn_id: string;
@@ -135,7 +139,7 @@ function migrate(database: Database) {
       id TEXT PRIMARY KEY,
       title TEXT NOT NULL,
       project TEXT NOT NULL DEFAULT '',
-      mode TEXT NOT NULL DEFAULT 'fork',
+      mode TEXT NOT NULL DEFAULT 'worktree',
       status TEXT NOT NULL DEFAULT 'open',
       summary TEXT NOT NULL DEFAULT '',
       created_at TEXT NOT NULL,
@@ -152,6 +156,8 @@ function migrate(database: Database) {
       brief TEXT NOT NULL DEFAULT '',
       thread_id TEXT NOT NULL DEFAULT '',
       cwd TEXT NOT NULL DEFAULT '',
+      worktree_path TEXT NOT NULL DEFAULT '',
+      branch_name TEXT NOT NULL DEFAULT '',
       status TEXT NOT NULL DEFAULT 'queued',
       current_task TEXT NOT NULL DEFAULT '',
       active_turn_id TEXT NOT NULL DEFAULT '',
@@ -165,6 +171,22 @@ function migrate(database: Database) {
   try {
     database.run(
       "ALTER TABLE participants ADD COLUMN active_turn_id TEXT NOT NULL DEFAULT '';",
+    );
+  } catch (error) {
+    if (!String(error).includes("duplicate column name")) throw error;
+  }
+
+  try {
+    database.run(
+      "ALTER TABLE participants ADD COLUMN worktree_path TEXT NOT NULL DEFAULT '';",
+    );
+  } catch (error) {
+    if (!String(error).includes("duplicate column name")) throw error;
+  }
+
+  try {
+    database.run(
+      "ALTER TABLE participants ADD COLUMN branch_name TEXT NOT NULL DEFAULT '';",
     );
   } catch (error) {
     if (!String(error).includes("duplicate column name")) throw error;
@@ -255,14 +277,20 @@ export function getRuntime(): RuntimeState | null {
 export function createCall(input: {
   title: string;
   project?: string;
-  mode?: "fork" | "fresh";
-  workers: Array<{ name: string; role: string; brief: string }>;
+  mode?: CallMode;
+  workers: Array<{
+    name: string;
+    role: string;
+    brief: string;
+    worktree_path?: string;
+    branch_name?: string;
+  }>;
   cwd?: string;
 }) {
   const database = getDb();
   const stamp = now();
   const callId = `call-${crypto.randomUUID().slice(0, 8)}`;
-  const mode = input.mode ?? "fork";
+  const mode = input.mode ?? "worktree";
 
   database.transaction(() => {
     database.run(
@@ -274,15 +302,17 @@ export function createCall(input: {
     for (const worker of input.workers) {
       database.run(
         `INSERT INTO participants
-         (id, call_id, name, role, brief, thread_id, cwd, status, current_task, last_seen, created_at)
-         VALUES (?, ?, ?, ?, ?, '', ?, 'queued', ?, ?, ?)`,
+         (id, call_id, name, role, brief, thread_id, cwd, worktree_path, branch_name, status, current_task, last_seen, created_at)
+         VALUES (?, ?, ?, ?, ?, '', ?, ?, ?, 'queued', ?, ?, ?)`,
         [
           `participant-${crypto.randomUUID().slice(0, 8)}`,
           callId,
           worker.name,
           worker.role,
           worker.brief,
-          input.cwd ?? "",
+          worker.worktree_path || input.cwd || "",
+          worker.worktree_path ?? "",
+          worker.branch_name ?? "",
           worker.brief,
           stamp,
           stamp,
@@ -352,13 +382,27 @@ export function setParticipantThreadId(input: {
   callId: string;
   name: string;
   threadId: string;
+  cwd?: string;
+  worktreePath?: string;
+  branchName?: string;
 }) {
   const stamp = now();
   getDb().run(
     `UPDATE participants
-     SET thread_id = ?, status = 'running', last_seen = ?
+     SET thread_id = ?, cwd = COALESCE(NULLIF(?, ''), cwd),
+       worktree_path = COALESCE(NULLIF(?, ''), worktree_path),
+       branch_name = COALESCE(NULLIF(?, ''), branch_name),
+       status = 'running', last_seen = ?
      WHERE call_id = ? AND name = ?`,
-    [input.threadId, stamp, input.callId, input.name],
+    [
+      input.threadId,
+      input.cwd ?? "",
+      input.worktreePath ?? "",
+      input.branchName ?? "",
+      stamp,
+      input.callId,
+      input.name,
+    ],
   );
   addEvent(input.callId, "participant.thread_linked", {
     name: input.name,

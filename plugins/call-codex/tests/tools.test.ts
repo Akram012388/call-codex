@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from "bun:test";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { mkdirSync } from "node:fs";
 import {
   getDb,
   resetDbForTests,
@@ -48,6 +49,38 @@ function fakeControlAppServer() {
                 codexHome: "/tmp/call-codex",
                 platformFamily: "unix",
                 platformOs: "macos",
+              },
+            }),
+          );
+          return;
+        }
+
+        if (request.method === "thread/start") {
+          ws.send(
+            JSON.stringify({
+              id: request.id,
+              result: {
+                thread: {
+                  id: "thread-control",
+                  status: { type: "idle" },
+                  ephemeral: false,
+                  turns: [],
+                },
+                model: "gpt-test",
+                modelProvider: "openai",
+                serviceTier: null,
+                cwd:
+                  typeof request.params === "object" &&
+                  request.params &&
+                  "cwd" in request.params
+                    ? request.params.cwd
+                    : "/tmp/call-codex",
+                instructionSources: [],
+                approvalPolicy: "on-request",
+                approvalsReviewer: "user",
+                sandbox: { type: "readOnly" },
+                permissionProfile: null,
+                reasoningEffort: null,
               },
             }),
           );
@@ -221,6 +254,13 @@ function fakeFailingReadAppServer() {
   return { server, calls };
 }
 
+function git(args: string[], cwd: string) {
+  const result = Bun.spawnSync(["git", ...args], { cwd });
+  if (result.exitCode !== 0) {
+    throw new Error(new TextDecoder().decode(result.stderr));
+  }
+}
+
 describe("CALL-CODEX scaffold tools", () => {
   beforeEach(() => {
     resetLiveStateForTests();
@@ -250,6 +290,7 @@ describe("CALL-CODEX scaffold tools", () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
     const result = await handleToolCall("call_create", {
       title: "Test call",
+      mode: "fork",
       workers: [{ name: "tests", role: "worker", brief: "check the line" }],
     });
 
@@ -258,10 +299,57 @@ describe("CALL-CODEX scaffold tools", () => {
     expect("status" in result ? result.status : undefined).toBe("created");
   });
 
+  test("creates worker threads in first-class git worktrees by default", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const repo = join(tmpdir(), `call-codex-repo-${crypto.randomUUID()}`);
+    mkdirSync(repo, { recursive: true });
+    await Bun.write(join(repo, "README.md"), "# test\n");
+    git(["init"], repo);
+    git(["config", "user.email", "call-codex@example.com"], repo);
+    git(["config", "user.name", "CALL-CODEX"], repo);
+    git(["add", "README.md"], repo);
+    git(["commit", "-m", "init"], repo);
+
+    const { server } = fakeControlAppServer();
+    upsertRuntime({
+      url: `ws://127.0.0.1:${server.port}`,
+      pid: process.pid,
+      status: "running",
+    });
+
+    try {
+      const created = await handleToolCall("call_create", {
+        title: "Worktree call",
+        cwd: repo,
+        workers: [{ name: "builder", role: "worker", brief: "build safely" }],
+      });
+      const result = created as {
+        app_server?: {
+          mode?: string;
+          worktrees?: Array<{ created: boolean; path: string; branch: string }>;
+        };
+        participants?: Array<{ cwd: string; worktree_path: string }>;
+      };
+
+      expect(created.ok).toBe(true);
+      expect(result.app_server?.mode).toBe("worktree");
+      expect(result.app_server?.worktrees?.[0]?.created).toBe(true);
+      expect(result.participants?.[0]?.cwd).toBe(
+        result.app_server?.worktrees?.[0]?.path,
+      );
+      expect(result.participants?.[0]?.worktree_path).toBe(
+        result.app_server?.worktrees?.[0]?.path,
+      );
+    } finally {
+      server.stop(true);
+    }
+  });
+
   test("records messages and exports a transcript", async () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
     const created = await handleToolCall("call_create", {
       title: "Transcript call",
+      mode: "fork",
       workers: [
         { name: "reviewer", role: "reviewer", brief: "watch the diff" },
       ],
@@ -302,6 +390,7 @@ describe("CALL-CODEX scaffold tools", () => {
     try {
       const created = await handleToolCall("call_create", {
         title: "Control call",
+        mode: "fork",
         workers: [
           { name: "pilot", role: "worker", brief: "fly the active turn" },
         ],
@@ -364,6 +453,7 @@ describe("CALL-CODEX scaffold tools", () => {
     try {
       const created = await handleToolCall("call_create", {
         title: "Reveal call",
+        mode: "fork",
         workers: [{ name: "glass", role: "worker", brief: "show up" }],
       });
       const callId = "call" in created && created.call ? created.call.id : "";
@@ -413,6 +503,7 @@ describe("CALL-CODEX scaffold tools", () => {
     try {
       const created = await handleToolCall("call_create", {
         title: "Progress call",
+        mode: "fork",
         workers: [{ name: "reader", role: "worker", brief: "report back" }],
       });
       const callId = "call" in created && created.call ? created.call.id : "";
@@ -488,6 +579,7 @@ describe("CALL-CODEX scaffold tools", () => {
     try {
       const created = await handleToolCall("call_create", {
         title: "Imported transcript call",
+        mode: "fork",
         workers: [{ name: "scribe", role: "worker", brief: "write it down" }],
       });
       const callId = "call" in created && created.call ? created.call.id : "";
@@ -564,6 +656,7 @@ describe("CALL-CODEX scaffold tools", () => {
     try {
       const created = await handleToolCall("call_create", {
         title: "Cached transcript call",
+        mode: "fork",
         workers: [{ name: "cache", role: "worker", brief: "keep receipts" }],
       });
       callId = "call" in created && created.call ? created.call.id : "";

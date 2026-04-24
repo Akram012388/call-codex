@@ -1,4 +1,6 @@
 import { z } from "zod";
+import { mkdirSync } from "node:fs";
+import { dirname, join } from "node:path";
 import {
   addMessage,
   buildWorkerTranscriptSectionsFromCache,
@@ -42,6 +44,8 @@ const workerSchema = z.object({
   name: z.string().min(1).max(64),
   role: z.string().min(1).max(64),
   brief: z.string().min(1).max(10_000),
+  worktree_path: z.string().optional(),
+  branch_name: z.string().optional(),
 });
 
 export const toolDefinitions = [
@@ -71,7 +75,13 @@ export const toolDefinitions = [
       properties: {
         title: { type: "string" },
         project: { type: "string" },
-        mode: { type: "string", enum: ["fork", "fresh"], default: "fork" },
+        mode: {
+          type: "string",
+          enum: ["worktree", "fork", "fresh"],
+          default: "worktree",
+          description:
+            "Default worktree mode creates one Git worktree per worker. Use fresh/fork for shared-cwd threads.",
+        },
         main_thread_id: {
           type: "string",
           description:
@@ -91,6 +101,8 @@ export const toolDefinitions = [
               name: { type: "string" },
               role: { type: "string" },
               brief: { type: "string" },
+              worktree_path: { type: "string" },
+              branch_name: { type: "string" },
             },
             required: ["name", "role", "brief"],
           },
@@ -307,12 +319,20 @@ const bootSchema = z.object({
 const createSchema = z.object({
   title: z.string().min(1).max(200),
   project: z.string().max(100).optional(),
-  mode: z.enum(["fork", "fresh"]).default("fork"),
+  mode: z.enum(["worktree", "fork", "fresh"]).default("worktree"),
   main_thread_id: z.string().min(1).optional(),
   cwd: z.string().optional(),
   reveal: z.boolean().default(false),
   workers: z.array(workerSchema).min(1).max(12),
 });
+
+type WorkerWorktreeResult = {
+  name: string;
+  created: boolean;
+  path: string;
+  branch: string;
+  reason: string | null;
+};
 
 const sendSchema = z.object({
   call_id: z.string().min(1),
@@ -449,10 +469,16 @@ function workerInstructions(
 async function startWorkerThreads(input: {
   callId: string;
   title: string;
-  mode: "fork" | "fresh";
+  mode: "worktree" | "fork" | "fresh";
   mainThreadId?: string;
   cwd?: string;
-  workers: Array<{ name: string; role: string; brief: string }>;
+  workers: Array<{
+    name: string;
+    role: string;
+    brief: string;
+    worktree_path?: string;
+    branch_name?: string;
+  }>;
 }) {
   if (input.mode === "fork" && !input.mainThreadId) {
     return {
@@ -460,6 +486,26 @@ async function startWorkerThreads(input: {
       requires_main_thread_id: true,
       message:
         "Fork mode needs main_thread_id so CALL-CODEX knows which Codex thread to fork.",
+    };
+  }
+
+  const worktrees =
+    input.mode === "worktree"
+      ? await prepareWorkerWorktrees({
+          callId: input.callId,
+          cwd: input.cwd ?? process.cwd(),
+          workers: input.workers,
+        })
+      : [];
+
+  if (input.mode === "worktree" && worktrees.some((item) => !item.created)) {
+    return {
+      worker_threads_created: false,
+      requires_main_thread_id: false,
+      mode: input.mode,
+      message:
+        "Worktree mode needs a Git repo and clean worktree paths before CALL-CODEX can park worker threads.",
+      worktrees,
     };
   }
 
@@ -471,20 +517,25 @@ async function startWorkerThreads(input: {
   try {
     for (const worker of input.workers) {
       const developerInstructions = workerInstructions(input.title, worker);
+      const worktree = worktrees.find((item) => item.name === worker.name);
+      const workerCwd =
+        input.mode === "worktree"
+          ? worktree?.path
+          : (input.cwd ?? process.cwd());
       const started =
-        input.mode === "fresh"
-          ? await client.startThread({
-              cwd: input.cwd ?? process.cwd(),
+        input.mode === "fork"
+          ? await client.forkThread({
+              threadId: input.mainThreadId!,
+              cwd: workerCwd,
+              developerInstructions,
+              ephemeral: false,
+              persistExtendedHistory: true,
+            })
+          : await client.startThread({
+              cwd: workerCwd,
               developerInstructions,
               ephemeral: false,
               experimentalRawEvents: false,
-              persistExtendedHistory: true,
-            })
-          : await client.forkThread({
-              threadId: input.mainThreadId!,
-              cwd: input.cwd ?? process.cwd(),
-              developerInstructions,
-              ephemeral: false,
               persistExtendedHistory: true,
             });
 
@@ -492,12 +543,18 @@ async function startWorkerThreads(input: {
         callId: input.callId,
         name: worker.name,
         threadId: started.thread.id,
+        cwd: workerCwd,
+        worktreePath: worktree?.path,
+        branchName: worktree?.branch,
       });
 
       workers.push({
         name: worker.name,
         role: worker.role,
         thread_id: started.thread.id,
+        cwd: workerCwd,
+        worktree_path: worktree?.path ?? "",
+        branch_name: worktree?.branch ?? "",
         status: participant?.status ?? "running",
       });
     }
@@ -510,8 +567,76 @@ async function startWorkerThreads(input: {
     requires_main_thread_id: false,
     mode: input.mode,
     runtime: getRuntime(),
+    worktrees,
     workers,
   };
+}
+
+function slug(value: string) {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 48);
+}
+
+async function runGit(args: string[], cwd: string) {
+  const proc = Bun.spawn(["git", ...args], {
+    cwd,
+    stdout: "pipe",
+    stderr: "pipe",
+  });
+  const [stdout, stderr, exitCode] = await Promise.all([
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+    proc.exited,
+  ]);
+  return { exitCode, stdout: stdout.trim(), stderr: stderr.trim() };
+}
+
+async function prepareWorkerWorktrees(input: {
+  callId: string;
+  cwd: string;
+  workers: Array<{
+    name: string;
+    worktree_path?: string;
+    branch_name?: string;
+  }>;
+}): Promise<WorkerWorktreeResult[]> {
+  const root = await runGit(["rev-parse", "--show-toplevel"], input.cwd);
+  if (root.exitCode !== 0) {
+    return input.workers.map((worker) => ({
+      name: worker.name,
+      created: false,
+      path: worker.worktree_path ?? "",
+      branch: worker.branch_name ?? "",
+      reason: "cwd is not inside a Git repository.",
+    }));
+  }
+
+  const repoRoot = root.stdout;
+  const baseDir = join(dirname(repoRoot), `${slug(input.callId)}-workers`);
+  mkdirSync(baseDir, { recursive: true });
+
+  const results = [];
+  for (const worker of input.workers) {
+    const nameSlug = slug(worker.name) || "worker";
+    const branch =
+      worker.branch_name || `call-codex/${slug(input.callId)}/${nameSlug}`;
+    const path = worker.worktree_path || join(baseDir, nameSlug);
+    const added = await runGit(
+      ["worktree", "add", "-b", branch, path],
+      repoRoot,
+    );
+    results.push({
+      name: worker.name,
+      created: added.exitCode === 0,
+      path,
+      branch,
+      reason: added.exitCode === 0 ? null : added.stderr || added.stdout,
+    });
+  }
+  return results;
 }
 
 function callMessageText(message: MessageRow) {
