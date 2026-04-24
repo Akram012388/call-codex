@@ -399,9 +399,7 @@ describe("CALL-CODEX scaffold tools", () => {
       expect(created.ok).toBe(true);
       expect(result.app_server?.mode).toBe("worktree");
       expect(result.app_server?.worktrees?.[0]?.created).toBe(true);
-      expect(result.participants?.[0]?.cwd).toBe(
-        result.app_server?.worktrees?.[0]?.path,
-      );
+      expect(result.participants?.[0]?.cwd).toBe(repo);
       expect(result.participants?.[0]?.worktree_path).toBe(
         result.app_server?.worktrees?.[0]?.path,
       );
@@ -414,7 +412,11 @@ describe("CALL-CODEX scaffold tools", () => {
         "turn/start",
       ]);
       expect(calls[1]?.params).toMatchObject({
+        cwd: repo,
         config: { model_reasoning_effort: "low" },
+      });
+      expect(calls[3]?.params).toMatchObject({
+        cwd: result.app_server?.worktrees?.[0]?.path,
       });
     } finally {
       server.stop(true);

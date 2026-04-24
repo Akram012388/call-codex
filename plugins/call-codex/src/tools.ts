@@ -653,15 +653,17 @@ async function startWorkerThreads(input: {
       try {
         const developerInstructions = workerInstructions(input.title, worker);
         const worktree = worktrees.find((item) => item.name === worker.name);
+        const parentCwd = input.cwd ?? process.cwd();
         const workerCwd =
           input.mode === "worktree"
             ? worktree?.path
-            : (input.cwd ?? process.cwd());
+            : parentCwd;
+        const threadCwd = input.mode === "worktree" ? parentCwd : workerCwd;
         const startPromise =
           input.mode === "fork"
             ? client.forkThread({
                 threadId: input.mainThreadId!,
-                cwd: workerCwd,
+                cwd: threadCwd,
                 model: worker.model,
                 config: worker.reasoning_effort
                   ? { model_reasoning_effort: worker.reasoning_effort }
@@ -671,7 +673,7 @@ async function startWorkerThreads(input: {
                 persistExtendedHistory: true,
               })
             : client.startThread({
-                cwd: workerCwd,
+                cwd: threadCwd,
                 model: worker.model,
                 config: worker.reasoning_effort
                   ? { model_reasoning_effort: worker.reasoning_effort }
@@ -690,7 +692,7 @@ async function startWorkerThreads(input: {
           callId: input.callId,
           name: worker.name,
           threadId: started.thread.id,
-          cwd: workerCwd,
+          cwd: threadCwd,
           worktreePath: worktree?.path,
           branchName: worktree?.branch,
         });
@@ -721,7 +723,7 @@ async function startWorkerThreads(input: {
           name: worker.name,
           role: worker.role,
           thread_id: started.thread.id,
-          cwd: workerCwd,
+          cwd: threadCwd,
           worktree_path: worktree?.path ?? "",
           branch_name: worktree?.branch ?? "",
           turn_id: turn.turn.id,
