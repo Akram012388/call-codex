@@ -404,11 +404,21 @@ describe("CALL-CODEX scaffold tools", () => {
       ).toBe(true);
       expect(
         "transcript" in transcript
+          ? transcript.transcript?.includes("- Source: live")
+          : false,
+      ).toBe(true);
+      expect(
+        "transcript" in transcript
           ? transcript.transcript?.includes(
               "Mission complete. The line is clear.",
             )
           : false,
       ).toBe(true);
+      expect(
+        "worker_transcript_metadata" in transcript
+          ? transcript.worker_transcript_metadata?.[0]?.source
+          : "",
+      ).toBe("live");
       expect(calls.map((call) => call.method)).toEqual([
         "initialize",
         "thread/inject_items",
@@ -466,6 +476,21 @@ describe("CALL-CODEX scaffold tools", () => {
             )
           : false,
       ).toBe(true);
+      expect(
+        "transcript" in transcript
+          ? transcript.transcript?.includes("- Source: cache")
+          : false,
+      ).toBe(true);
+      expect(
+        "worker_transcript_metadata" in transcript
+          ? transcript.worker_transcript_metadata?.[0]?.source
+          : "",
+      ).toBe("cache");
+      expect(
+        "worker_transcript_metadata" in transcript
+          ? transcript.worker_transcript_metadata?.[0]?.imported_at
+          : null,
+      ).toBeTruthy();
       expect(failing.calls.map((call) => call.method)).toEqual([
         "initialize",
         "thread/read",

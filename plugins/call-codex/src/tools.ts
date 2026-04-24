@@ -643,6 +643,21 @@ function transcriptEntries(items: ThreadItem[]) {
   return entries;
 }
 
+function transcriptMetadata(sections: WorkerTranscriptSection[]) {
+  return sections.map((section) => ({
+    participant: section.participant,
+    thread_id: section.thread_id,
+    source: section.source,
+    imported_at: section.imported_at,
+    turn_count: section.turns.length,
+    item_count: section.turns.reduce(
+      (sum, turn) => sum + turn.entries.length,
+      0,
+    ),
+    error: section.error ?? null,
+  }));
+}
+
 async function importWorkerTranscriptSections(
   callId: string,
   participants: ParticipantRow[],
@@ -667,6 +682,8 @@ async function importWorkerTranscriptSections(
         const section = {
           participant: participant.name,
           thread_id: participant.thread_id,
+          source: "live" as const,
+          imported_at: new Date().toISOString(),
           turns: read.thread.turns.map((turn) => ({
             id: turn.id,
             status: turn.status,
@@ -697,6 +714,8 @@ async function importWorkerTranscriptSections(
         sections.push({
           participant: participant.name,
           thread_id: participant.thread_id,
+          source: "live",
+          imported_at: null,
           turns: [],
           error: error instanceof Error ? error.message : String(error),
         });
@@ -1385,6 +1404,7 @@ export async function handleToolCall(name: string, args: unknown) {
         parsed.data.call_id,
         bundle.participants,
       );
+      const workerMetadata = transcriptMetadata(workerSections);
       const transcript = buildTranscript(parsed.data.call_id, workerSections);
       if (!transcript) return missingCall(name, parsed.data.call_id);
       return {
@@ -1392,6 +1412,7 @@ export async function handleToolCall(name: string, args: unknown) {
         tool: name,
         format: parsed.data.format,
         worker_sections_imported: workerSections.length,
+        worker_transcript_metadata: workerMetadata,
         transcript,
       };
     }

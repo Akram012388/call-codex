@@ -665,6 +665,8 @@ export function listWorkerTranscriptItems(callId: string) {
 export type WorkerTranscriptSection = {
   participant: string;
   thread_id: string;
+  source: "live" | "cache";
+  imported_at: string | null;
   turns: Array<{
     id: string;
     status: string;
@@ -692,9 +694,16 @@ export function buildWorkerTranscriptSectionsFromCache(
       section = {
         participant: row.participant,
         thread_id: row.thread_id,
+        source: "cache",
+        imported_at: row.imported_at,
         turns: [],
       };
       sections.set(sectionKey, section);
+    } else if (
+      section.imported_at === null ||
+      row.imported_at > section.imported_at
+    ) {
+      section.imported_at = row.imported_at;
     }
 
     let turn = section.turns.find((item) => item.id === row.turn_id);
@@ -760,6 +769,8 @@ export function buildTranscript(
         `### ${worker.participant}`,
         "",
         `- Thread: ${worker.thread_id}`,
+        `- Source: ${worker.source}`,
+        `- Imported: ${worker.imported_at ?? "not cached"}`,
       );
       if (worker.error) {
         lines.push(`- Import error: ${worker.error}`, "");

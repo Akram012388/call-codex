@@ -77,9 +77,9 @@ The repo-local plugin scaffold now lives under `plugins/call-codex` with a Codex
 
 `call_status` now reads active worker threads with `thread/read`, shows recent assistant output in `worker_progress`, reports completion/failure/interruption, and clears finished active turns from the local board.
 
-`call_transcript` now imports worker turns with `thread/read`, caches imported worker output locally, and exports both CALL-CODEX line messages and worker assistant output under a `Worker Output` section. If a worker thread is unavailable later, cached receipts still make the transcript useful.
+`call_transcript` now imports worker turns with `thread/read`, caches imported worker output locally, and exports both CALL-CODEX line messages and worker assistant output under a `Worker Output` section. Each worker section marks whether output came from a live read or cached receipts, with import timestamps in the structured metadata.
 
-The next step is richer lifecycle polish: event subscriptions, cache freshness indicators, and tighter macOS app smoke testing.
+The next step is richer lifecycle polish: event subscriptions, stale-cache warnings, and tighter macOS app smoke testing.
 
 ## Spirit
 
