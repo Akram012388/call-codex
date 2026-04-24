@@ -694,6 +694,28 @@ async function startWorkerThreads(input: {
           worktreePath: worktree?.path,
           branchName: worktree?.branch,
         });
+        const title = `CALL-CODEX: ${input.title} / ${worker.name}`;
+        await client.setThreadName({
+          threadId: started.thread.id,
+          name: title,
+        });
+        const prompt = turnPromptText({
+          from: "main",
+          to: worker.name,
+          prompt: worker.brief,
+          action: "wake",
+        });
+        const turn = await client.startTurn({
+          threadId: started.thread.id,
+          input: [textUserInput(prompt)],
+          cwd: workerCwd,
+        });
+        const activeParticipant = setParticipantActiveTurn({
+          callId: input.callId,
+          name: worker.name,
+          turnId: turn.turn.id,
+          currentTask: worker.brief,
+        });
 
         workers.push({
           name: worker.name,
@@ -702,7 +724,8 @@ async function startWorkerThreads(input: {
           cwd: workerCwd,
           worktree_path: worktree?.path ?? "",
           branch_name: worktree?.branch ?? "",
-          status: participant?.status ?? "running",
+          turn_id: turn.turn.id,
+          status: activeParticipant?.status ?? participant?.status ?? "running",
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
@@ -1549,9 +1572,9 @@ export async function handleToolCall(name: string, args: unknown) {
         status: "created",
         message:
           appServer.worker_threads_created && reveal.length > 0
-            ? "CALL-CODEX opened the line, parked the workers, and brought them to the glass."
+            ? "CALL-CODEX opened the line, started the workers, and brought them to the glass."
             : appServer.worker_threads_created
-              ? "CALL-CODEX opened the line and parked the workers in real Codex threads."
+              ? "CALL-CODEX opened the line and started the workers in real Codex threads."
               : "CALL-CODEX opened the call board. Add main_thread_id for fork mode, or use fresh mode to spin workers now.",
         app_server: appServer,
         reveal,

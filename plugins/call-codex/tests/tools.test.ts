@@ -363,7 +363,7 @@ describe("CALL-CODEX scaffold tools", () => {
     git(["add", "README.md"], repo);
     git(["commit", "-m", "init"], repo);
 
-    const { server } = fakeControlAppServer();
+    const { server, calls } = fakeControlAppServer();
     upsertRuntime({
       url: `ws://127.0.0.1:${server.port}`,
       pid: process.pid,
@@ -381,7 +381,12 @@ describe("CALL-CODEX scaffold tools", () => {
           mode?: string;
           worktrees?: Array<{ created: boolean; path: string; branch: string }>;
         };
-        participants?: Array<{ cwd: string; worktree_path: string }>;
+        participants?: Array<{
+          cwd: string;
+          worktree_path: string;
+          active_turn_id: string;
+          status: string;
+        }>;
       };
 
       expect(created.ok).toBe(true);
@@ -393,6 +398,14 @@ describe("CALL-CODEX scaffold tools", () => {
       expect(result.participants?.[0]?.worktree_path).toBe(
         result.app_server?.worktrees?.[0]?.path,
       );
+      expect(result.participants?.[0]?.active_turn_id).toBe("turn-control");
+      expect(result.participants?.[0]?.status).toBe("running");
+      expect(calls.map((call) => call.method)).toEqual([
+        "initialize",
+        "thread/start",
+        "thread/name/set",
+        "turn/start",
+      ]);
     } finally {
       server.stop(true);
     }

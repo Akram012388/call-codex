@@ -73,9 +73,9 @@ The repo-local plugin lives under `plugins/call-codex` with a Codex manifest, lo
 
 `call_boot` can start a managed loopback Codex app-server, and the SQLite call board is wired for local calls, participants, messages, status, and transcripts.
 
-`call_create` is worktree-first by default: each worker gets a Git worktree, a branch, a Codex thread, and a first-class worker contract. `fresh` and `fork` remain available when a shared cwd is intentional. `call_send` and `call_broadcast` inject call-line messages into workers with `thread/inject_items` when a participant has a thread ID.
+`call_create` is worktree-first by default: each worker gets a Git worktree, a branch, a named Codex thread, an initial worker turn, and a first-class worker contract. `fresh` and `fork` remain available when a shared cwd is intentional. `call_send` and `call_broadcast` inject call-line messages into workers with `thread/inject_items` when a participant has a thread ID.
 
-`call_wake`, `call_steer`, and `call_interrupt` now move workers from parked threads into active missions through `turn/start`, `turn/steer`, and `turn/interrupt`, with active turn IDs tracked on the local board.
+`call_wake`, `call_steer`, and `call_interrupt` keep active missions moving through `turn/start`, `turn/steer`, and `turn/interrupt`, with active turn IDs tracked on the local board.
 
 `call_status` now reads live worker events first, falls back to `thread/read`, shows recent assistant output in `worker_progress`, reports completion/failure/interruption, clears finished active turns from the local board, and includes health signals for long-running calls.
 
