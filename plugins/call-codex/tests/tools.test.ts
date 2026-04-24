@@ -378,6 +378,30 @@ describe("CALL-CODEX scaffold tools", () => {
     }
   });
 
+  test("does not create macOS-visible workers without a native app-server", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+
+    const created = await handleToolCall("call_create", {
+      title: "Native required",
+      mode: "fresh",
+      workers: [{ name: "visible", role: "worker", brief: "show in app" }],
+    });
+    const result = created as {
+      app_server?: {
+        backend?: string;
+        worker_threads_created?: boolean;
+        message?: string;
+      };
+      participants?: Array<{ status: string; current_task: string }>;
+    };
+
+    expect(created.ok).toBe(true);
+    expect(result.app_server?.worker_threads_created).toBe(false);
+    expect(result.app_server?.backend).toBe("unavailable");
+    expect(result.app_server?.message).toContain("native app-server");
+    expect(result.participants?.[0]?.status).toBe("failed");
+  });
+
   test("creates worker threads in first-class git worktrees by default", async () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
     const repo = join(tmpdir(), `call-codex-repo-${crypto.randomUUID()}`);
@@ -390,6 +414,7 @@ describe("CALL-CODEX scaffold tools", () => {
     git(["commit", "-m", "init"], repo);
 
     const { server, calls } = fakeControlAppServer();
+    process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
     upsertRuntime({
       url: `ws://127.0.0.1:${server.port}`,
       pid: process.pid,
@@ -445,6 +470,7 @@ describe("CALL-CODEX scaffold tools", () => {
         cwd: result.app_server?.worktrees?.[0]?.path,
       });
     } finally {
+      delete process.env.CALL_CODEX_APP_SERVER_URL;
       server.stop(true);
     }
   });
@@ -490,6 +516,7 @@ describe("CALL-CODEX scaffold tools", () => {
   test("keeps call_create alive when worker thread starts fail", async () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
     const { server } = fakeFailingStartAppServer();
+    process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
     upsertRuntime({
       url: `ws://127.0.0.1:${server.port}`,
       pid: process.pid,
@@ -515,6 +542,7 @@ describe("CALL-CODEX scaffold tools", () => {
       expect(result.app_server?.failures?.[0]?.error).toContain("start failed");
       expect(result.participants?.[0]?.status).toBe("failed");
     } finally {
+      delete process.env.CALL_CODEX_APP_SERVER_URL;
       server.stop(true);
     }
   });
@@ -618,6 +646,7 @@ describe("CALL-CODEX scaffold tools", () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
     process.env.CALL_CODEX_REVEAL_DRY_RUN = "1";
     const { server, calls } = fakeControlAppServer();
+    process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
     upsertRuntime({
       url: `ws://127.0.0.1:${server.port}`,
       pid: process.pid,
@@ -660,6 +689,7 @@ describe("CALL-CODEX scaffold tools", () => {
         "thread/name/set",
       ]);
     } finally {
+      delete process.env.CALL_CODEX_APP_SERVER_URL;
       delete process.env.CALL_CODEX_REVEAL_DRY_RUN;
       server.stop(true);
     }

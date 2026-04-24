@@ -96,6 +96,13 @@ export const toolDefinitions = [
           description:
             "Default worktree mode creates one Git worktree per worker. Use fresh/fork for shared-cwd threads.",
         },
+        visibility: {
+          type: "string",
+          enum: ["macos_app", "background"],
+          default: "macos_app",
+          description:
+            "macos_app requires the native Codex app-server path; background explicitly allows managed app-server sessions.",
+        },
         main_thread_id: {
           type: "string",
           description:
@@ -360,6 +367,7 @@ const createSchema = z.object({
   title: z.string().min(1).max(200),
   project: z.string().max(100).optional(),
   mode: z.enum(["worktree", "fork", "fresh"]).default("worktree"),
+  visibility: z.enum(["macos_app", "background"]).default("macos_app"),
   main_thread_id: z.string().min(1).optional(),
   cwd: z.string().optional(),
   reveal: z.boolean().default(false),
@@ -596,6 +604,7 @@ async function startWorkerThreads(input: {
   callId: string;
   title: string;
   mode: "worktree" | "fork" | "fresh";
+  visibility: "macos_app" | "background";
   mainThreadId?: string;
   cwd?: string;
   workers: Array<{
@@ -617,8 +626,39 @@ async function startWorkerThreads(input: {
     return {
       worker_threads_created: false,
       requires_main_thread_id: true,
+      visibility: input.visibility,
       message:
         "Fork mode needs main_thread_id so CALL-CODEX knows which Codex thread to fork.",
+    };
+  }
+
+  let boot;
+  try {
+    boot = await bootManagedAppServer({
+      requireNative: input.visibility === "macos_app",
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    for (const worker of input.workers) {
+      updateCall({
+        callId: input.callId,
+        participant: worker.name,
+        status: "failed",
+        blocker: message,
+      });
+    }
+    return {
+      worker_threads_created: false,
+      requires_main_thread_id: false,
+      mode: input.mode,
+      visibility: input.visibility,
+      backend: "unavailable",
+      macos_app_visible_backend: false,
+      message,
+      failures: input.workers.map((worker) => ({
+        name: worker.name,
+        error: message,
+      })),
     };
   }
 
@@ -636,13 +676,15 @@ async function startWorkerThreads(input: {
       worker_threads_created: false,
       requires_main_thread_id: false,
       mode: input.mode,
+      visibility: input.visibility,
+      backend: boot.backend,
+      macos_app_visible_backend: boot.backend === "macos_app",
       message:
         "Worktree mode needs a Git repo and clean worktree paths before CALL-CODEX can park worker threads.",
       worktrees,
     };
   }
 
-  const boot = await bootManagedAppServer();
   const runtime = requireRuntime(boot.runtime);
   const client = appServerClient(runtime.url);
   const workers = [];
@@ -751,7 +793,9 @@ async function startWorkerThreads(input: {
     worker_threads_created: workers.length > 0,
     requires_main_thread_id: false,
     mode: input.mode,
+    visibility: input.visibility,
     backend: boot.backend,
+    macos_app_visible_backend: boot.backend === "macos_app",
     runtime: getRuntime(),
     worktrees,
     workers,
@@ -1072,6 +1116,20 @@ async function revealParticipants(input: {
   }
 
   const boot = await bootManagedAppServer();
+  if (boot.backend !== "macos_app") {
+    return input.participants.map((participant) => ({
+      participant: participant.name,
+      thread_id: participant.thread_id,
+      reveal_url: participant.thread_id
+        ? codexThreadRevealUrl(participant.thread_id)
+        : undefined,
+      revealed: false,
+      reveal_strategy: "native_app_server_required",
+      reason:
+        "Worker was created by the managed background app-server, so the Codex macOS app did not register it as a visible sidebar conversation.",
+    }));
+  }
+
   const runtime = requireRuntime(boot.runtime);
   const client = appServerClient(runtime.url);
 
@@ -1567,6 +1625,7 @@ export async function handleToolCall(name: string, args: unknown) {
             callId: bundle.call.id,
             title: parsed.data.title,
             mode: parsed.data.mode,
+            visibility: parsed.data.visibility,
             mainThreadId: parsed.data.main_thread_id,
             cwd: parsed.data.cwd,
             workers: parsed.data.workers,
@@ -1580,16 +1639,29 @@ export async function handleToolCall(name: string, args: unknown) {
               participants: currentBundle.participants,
             })
           : [];
+      const appServerVisible =
+        "macos_app_visible_backend" in appServer
+          ? appServer.macos_app_visible_backend === true
+          : false;
+      const appServerMessage =
+        "message" in appServer && typeof appServer.message === "string"
+          ? appServer.message
+          : undefined;
       return {
         ok: true,
         tool: name,
         status: "created",
         message:
           appServer.worker_threads_created && reveal.length > 0
-            ? "CALL-CODEX opened the line, started the workers, and brought them to the glass."
+            ? reveal.some((item) => item.revealed)
+              ? "CALL-CODEX opened the line, started the workers, and brought them to the glass."
+              : "CALL-CODEX started background workers, but native macOS thread reveal is unavailable."
             : appServer.worker_threads_created
-              ? "CALL-CODEX opened the line and started the workers in real Codex threads."
-              : "CALL-CODEX opened the call board. Add main_thread_id for fork mode, or use fresh mode to spin workers now.",
+              ? appServerVisible
+                ? "CALL-CODEX opened the line and started visible Codex macOS worker threads."
+                : "CALL-CODEX opened the line in background worker threads."
+              : appServerMessage ??
+                "CALL-CODEX opened the call board. Add main_thread_id for fork mode, or use background visibility if native macOS worker threads are unavailable.",
         app_server: appServer,
         reveal,
         ...(currentBundle ?? bundle),

@@ -5,6 +5,7 @@ import { getRuntime, upsertRuntime } from "../bus";
 
 export type BootOptions = {
   forceRestart?: boolean;
+  requireNative?: boolean;
 };
 
 export type AppServerBackend = "macos_app" | "managed";
@@ -105,6 +106,12 @@ export async function bootManagedAppServer(options: BootOptions = {}) {
         runtime: upsertRuntime({ url: nativeUrl, pid: null, status: "running" })
       };
     }
+  }
+
+  if (options.requireNative) {
+    throw new Error(
+      "CALL-CODEX needs the Codex macOS app's native app-server connection for visible worker threads, but no native app-server URL was exposed to the plugin.",
+    );
   }
 
   const existing = getRuntime();
