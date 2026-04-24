@@ -6,6 +6,8 @@ import type { ThreadInjectItemsParams } from "./generated/v2/ThreadInjectItemsPa
 import type { ThreadInjectItemsResponse } from "./generated/v2/ThreadInjectItemsResponse";
 import type { ThreadReadParams } from "./generated/v2/ThreadReadParams";
 import type { ThreadReadResponse } from "./generated/v2/ThreadReadResponse";
+import type { ThreadSetNameParams } from "./generated/v2/ThreadSetNameParams";
+import type { ThreadSetNameResponse } from "./generated/v2/ThreadSetNameResponse";
 import type { TurnStartParams } from "./generated/v2/TurnStartParams";
 import type { TurnStartResponse } from "./generated/v2/TurnStartResponse";
 import type { TurnSteerParams } from "./generated/v2/TurnSteerParams";
@@ -162,6 +164,11 @@ export class AppServerClient {
   async readThread(params: ThreadReadParams) {
     await this.initialize();
     return this.request<ThreadReadResponse>("thread/read", params);
+  }
+
+  async setThreadName(params: ThreadSetNameParams) {
+    await this.initialize();
+    return this.request<ThreadSetNameResponse>("thread/name/set", params);
   }
 
   close() {

@@ -78,6 +78,11 @@ export const toolDefinitions = [
             "Required to fork workers from the current main Codex thread.",
         },
         cwd: { type: "string" },
+        reveal: {
+          type: "boolean",
+          description:
+            "Open created worker threads in the Codex macOS app with codex:// deep links.",
+        },
         workers: {
           type: "array",
           items: {
@@ -207,6 +212,22 @@ export const toolDefinitions = [
     },
   },
   {
+    name: "call_reveal",
+    description:
+      "Bring a CALL-CODEX worker thread to the Codex macOS app glass.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        call_id: { type: "string" },
+        participant: {
+          type: "string",
+          description: "Optional worker name. Omit to reveal every worker.",
+        },
+      },
+      required: ["call_id"],
+    },
+  },
+  {
     name: "call_update",
     description: "Update call, participant, or task state.",
     inputSchema: {
@@ -289,6 +310,7 @@ const createSchema = z.object({
   mode: z.enum(["fork", "fresh"]).default("fork"),
   main_thread_id: z.string().min(1).optional(),
   cwd: z.string().optional(),
+  reveal: z.boolean().default(false),
   workers: z.array(workerSchema).min(1).max(12),
 });
 
@@ -339,6 +361,11 @@ const interruptSchema = z.object({
 const whoSchema = z.object({
   call_id: z.string().optional(),
   project: z.string().optional(),
+});
+
+const revealSchema = z.object({
+  call_id: z.string().min(1),
+  participant: z.string().min(1).max(64).optional(),
 });
 
 const updateSchema = z.object({
@@ -574,6 +601,107 @@ function missingParticipant(tool: string, callId: string, participant: string) {
     tool,
     error: `No CALL-CODEX participant named ${participant} is on ${callId}`,
   };
+}
+
+function codexThreadRevealUrl(threadId: string) {
+  return `codex:///local/${encodeURIComponent(threadId)}`;
+}
+
+async function revealCodexThread(input: {
+  client?: AppServerClient;
+  callTitle: string;
+  participant: ParticipantRow;
+}) {
+  if (!input.participant.thread_id) {
+    return {
+      participant: input.participant.name,
+      revealed: false,
+      reason: "Worker has no Codex thread yet.",
+    };
+  }
+
+  const title = `CALL-CODEX: ${input.callTitle} / ${input.participant.name}`;
+  const revealUrl = codexThreadRevealUrl(input.participant.thread_id);
+  let name_set = false;
+  let name_error: string | null = null;
+
+  try {
+    await input.client?.setThreadName({
+      threadId: input.participant.thread_id,
+      name: title,
+    });
+    name_set = Boolean(input.client);
+  } catch (error) {
+    name_error = error instanceof Error ? error.message : String(error);
+  }
+
+  if (process.env.CALL_CODEX_REVEAL_DRY_RUN !== "1") {
+    const opened = Bun.spawn(["open", revealUrl], {
+      stdout: "ignore",
+      stderr: "ignore",
+    });
+    await opened.exited;
+    if (opened.exitCode !== 0) {
+      return {
+        participant: input.participant.name,
+        thread_id: input.participant.thread_id,
+        reveal_url: revealUrl,
+        revealed: false,
+        name_set,
+        name_error,
+        reason: `macOS open exited with code ${opened.exitCode}.`,
+      };
+    }
+  }
+
+  return {
+    participant: input.participant.name,
+    thread_id: input.participant.thread_id,
+    reveal_url: revealUrl,
+    revealed: true,
+    name_set,
+    name_error,
+    title,
+  };
+}
+
+async function revealParticipants(input: {
+  callId: string;
+  participants: ParticipantRow[];
+}) {
+  const bundle = getCallBundle(input.callId, false);
+  if (!bundle) return [];
+
+  const withThreads = input.participants.filter(
+    (participant) => participant.thread_id,
+  );
+  if (withThreads.length === 0) {
+    return input.participants.map((participant) => ({
+      participant: participant.name,
+      revealed: false,
+      reason: "Worker has no Codex thread yet.",
+    }));
+  }
+
+  const boot = await bootManagedAppServer();
+  const runtime = requireRuntime(boot.runtime);
+  const client = new AppServerClient(runtime.url);
+
+  try {
+    const results = [];
+    for (const participant of input.participants) {
+      results.push(
+        await revealCodexThread({
+          client,
+          callTitle: bundle.call.title,
+          participant,
+        }),
+      );
+    }
+    return results;
+  } finally {
+    client.close();
+  }
 }
 
 function latestAssistantText(items: ThreadItem[]) {
@@ -994,15 +1122,27 @@ export async function handleToolCall(name: string, args: unknown) {
             workers: parsed.data.workers,
           })
         : { worker_threads_created: false };
+      const currentBundle = bundle?.call ? getCallBundle(bundle.call.id) : null;
+      const reveal =
+        parsed.data.reveal && currentBundle
+          ? await revealParticipants({
+              callId: currentBundle.call.id,
+              participants: currentBundle.participants,
+            })
+          : [];
       return {
         ok: true,
         tool: name,
         status: "created",
-        message: appServer.worker_threads_created
-          ? "CALL-CODEX opened the line and parked the workers in real Codex threads."
-          : "CALL-CODEX opened the call board. Add main_thread_id for fork mode, or use fresh mode to spin workers now.",
+        message:
+          appServer.worker_threads_created && reveal.length > 0
+            ? "CALL-CODEX opened the line, parked the workers, and brought them to the glass."
+            : appServer.worker_threads_created
+              ? "CALL-CODEX opened the line and parked the workers in real Codex threads."
+              : "CALL-CODEX opened the call board. Add main_thread_id for fork mode, or use fresh mode to spin workers now.",
         app_server: appServer,
-        ...(bundle?.call ? getCallBundle(bundle.call.id) : bundle),
+        reveal,
+        ...(currentBundle ?? bundle),
       };
     }
 
@@ -1115,6 +1255,36 @@ export async function handleToolCall(name: string, args: unknown) {
           participant: parsed.data.participant,
           limit: parsed.data.limit,
         }),
+      };
+    }
+
+    case "call_reveal": {
+      const parsed = parse(revealSchema, name, args);
+      if (!parsed.ok) return parsed;
+      const bundle = getCallBundle(parsed.data.call_id, false);
+      if (!bundle) return missingCall(name, parsed.data.call_id);
+      const participants = selectParticipants(bundle, parsed.data.participant);
+      if (parsed.data.participant && participants.length === 0) {
+        return missingParticipant(
+          name,
+          parsed.data.call_id,
+          parsed.data.participant,
+        );
+      }
+      const reveal = await revealParticipants({
+        callId: parsed.data.call_id,
+        participants,
+      });
+      return {
+        ok: true,
+        tool: name,
+        status: reveal.some((item) => item.revealed)
+          ? "revealed"
+          : "not_revealed",
+        message: reveal.some((item) => item.revealed)
+          ? "CALL-CODEX brought the worker thread to the Codex app glass."
+          : "CALL-CODEX could not reveal a worker thread yet.",
+        reveal,
       };
     }
 

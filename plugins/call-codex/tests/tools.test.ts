@@ -81,6 +81,11 @@ function fakeControlAppServer() {
           return;
         }
 
+        if (request.method === "thread/name/set") {
+          ws.send(JSON.stringify({ id: request.id, result: {} }));
+          return;
+        }
+
         if (request.method === "thread/read") {
           ws.send(
             JSON.stringify({
@@ -181,6 +186,7 @@ describe("CALL-CODEX scaffold tools", () => {
       "call_steer",
       "call_interrupt",
       "call_who",
+      "call_reveal",
       "call_update",
       "call_status",
       "call_cancel",
@@ -289,6 +295,56 @@ describe("CALL-CODEX scaffold tools", () => {
         "turn/interrupt",
       ]);
     } finally {
+      server.stop(true);
+    }
+  });
+
+  test("reveals a worker thread with a Codex desktop deep link", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    process.env.CALL_CODEX_REVEAL_DRY_RUN = "1";
+    const { server, calls } = fakeControlAppServer();
+    upsertRuntime({
+      url: `ws://127.0.0.1:${server.port}`,
+      pid: process.pid,
+      status: "running",
+    });
+
+    try {
+      const created = await handleToolCall("call_create", {
+        title: "Reveal call",
+        workers: [{ name: "glass", role: "worker", brief: "show up" }],
+      });
+      const callId = "call" in created && created.call ? created.call.id : "";
+      setParticipantThreadId({
+        callId,
+        name: "glass",
+        threadId: "thread-control",
+      });
+
+      const reveal = await handleToolCall("call_reveal", {
+        call_id: callId,
+        participant: "glass",
+      });
+      const result = reveal as {
+        reveal?: Array<{
+          reveal_url?: string;
+          revealed?: boolean;
+          name_set?: boolean;
+        }>;
+      };
+
+      expect(reveal.ok).toBe(true);
+      expect(result.reveal?.[0]?.revealed).toBe(true);
+      expect(result.reveal?.[0]?.name_set).toBe(true);
+      expect(result.reveal?.[0]?.reveal_url).toBe(
+        "codex:///local/thread-control",
+      );
+      expect(calls.map((call) => call.method)).toEqual([
+        "initialize",
+        "thread/name/set",
+      ]);
+    } finally {
+      delete process.env.CALL_CODEX_REVEAL_DRY_RUN;
       server.stop(true);
     }
   });
