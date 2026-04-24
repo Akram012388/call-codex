@@ -11,12 +11,13 @@ CALL-CODEX lets Codex coordinate Codex through app-server calls. Treat the macOS
 
 - Use `call_boot` before any other CALL-CODEX action.
 - Use `call_create` to open a named call and create workers.
-- Prefer `mode: "fork"` when the current main thread ID is available; use `mode: "fresh"` for clean workers or when no main thread ID is available.
+- Prefer default `mode: "worktree"` for real repo work; use `fork` or `fresh` only when shared-cwd workers are intentional.
 - Use `call_send` for one worker and `call_broadcast` for everyone on the line.
 - Use `call_wake` to start active work; use `call_steer` only after a worker has an active turn.
 - Use `call_interrupt` for the worker brake, then inspect `call_status`.
 - Use `call_status` before summarizing progress; trust its `worker_progress` block for recent worker output and auto-cleared turns.
 - Use `call_transcript` for final receipts; it imports and caches worker assistant output, and its metadata marks live vs cached, fresh vs stale, and read failures.
+- Use `call_remove_thread` to cleanly archive and remove one worker thread from a call.
 - Use `call_close` when the call is done.
 - Never call these workflows orchestration in user-facing copy. It is a call.
 
@@ -26,4 +27,4 @@ Be playful, sharp, and operationally precise. "CALL-CODEX lands AGI" is a rallyi
 
 ## Safety
 
-Keep app-server local to `127.0.0.1`. Do not suggest remote listeners for v1. Preserve transcripts and audit state.
+Keep app-server local to `127.0.0.1`. Do not suggest remote listeners for v1. Preserve transcripts and audit state. Treat worktree cleanup as explicit, never automatic.

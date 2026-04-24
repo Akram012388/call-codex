@@ -1,16 +1,19 @@
-# CALL-CODEX Plugin Scaffold
+# CALL-CODEX Plugin
 
-This folder contains the installable Codex plugin scaffold.
+CALL-CODEX is the installable Codex plugin for opening app-server-powered calls between Codex threads.
 
-Current slice:
+It is macOS-first, local-first, and built around the `call_*` tool surface: boot the line, create worker threads, wake turns, steer progress, stream status, preserve transcripts, and cleanly remove workers when the call is done.
 
-- `.codex-plugin/plugin.json` is filled with v1 metadata.
-- `.mcp.json` points Codex at the Bun-powered MCP server.
-- `skills/call-codex/SKILL.md` teaches Codex the call-first workflow.
-- `src/server.ts` exposes the planned `call_*` MCP tools.
-- `src/app-server/generated/` is generated from the local Codex app-server protocol.
+## What Is Included
 
-Run from this directory:
+- `.codex-plugin/plugin.json` marketplace-ready plugin metadata.
+- `.mcp.json` for the Bun-powered MCP server.
+- `skills/call-codex/SKILL.md` for the call-first workflow.
+- `src/server.ts` exposing the `call_*` MCP tools.
+- `src/app-server/generated/` generated from local Codex app-server types.
+- `assets/` with CALL-CODEX icon/logo files.
+
+## Local Checks
 
 ```bash
 bun install
@@ -18,4 +21,11 @@ bun run typecheck
 bun test
 ```
 
-The tool implementations are intentionally scaffold responses. The next build slice wires `call_boot` to a managed loopback app-server and adds the SQLite call board.
+## Safety Defaults
+
+- Managed app-server binds to `127.0.0.1`.
+- `call_create` defaults to one Git worktree per worker.
+- SQLite receipts live under `~/.codex/call-codex/`.
+- Worker cleanup is explicit through `call_remove_thread`, `call_cancel`, or `call_close`.
+
+Dial carefully. Build boldly.

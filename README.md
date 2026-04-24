@@ -22,7 +22,7 @@ CALL-CODEX brings those primitives into one super-user workflow:
 
 No copy-paste relay. No vague "some other agent is doing something somewhere." Just calls, workers, status, and receipts.
 
-## Planned `call_*` Tools
+## `call_*` Tools
 
 The public surface is intentionally playful and sharp:
 
@@ -35,6 +35,8 @@ The public surface is intentionally playful and sharp:
 - `call_steer` - steer an active worker turn.
 - `call_interrupt` - stop one worker turn, or pull the brake on the whole call.
 - `call_who` - see who is on the line.
+- `call_reveal` - bring worker threads to the Codex macOS app glass.
+- `call_remove_thread` - archive and cleanly remove one worker from a call.
 - `call_update` - update task or call state.
 - `call_status` - show progress, blockers, and recent traffic.
 - `call_cancel` - interrupt active work and mark the call cancelled.
@@ -57,7 +59,7 @@ Remote app-server setups may come later, but v1 starts on the Mac, close to the 
 
 ## Build Status
 
-This repository is in the early build phase.
+This repository is in the early build phase, with the core plugin v1 now in place.
 
 The locked v1 stack is:
 
@@ -67,19 +69,19 @@ The locked v1 stack is:
 - Codex plugin manifest, skill, and MCP server
 - SQLite via Bun's built-in runtime
 
-The repo-local plugin scaffold now lives under `plugins/call-codex` with a Codex manifest, local marketplace entry, skill, MCP server, generated app-server protocol types, and starter tests.
+The repo-local plugin lives under `plugins/call-codex` with a Codex manifest, local marketplace entry, skill, MCP server, generated app-server protocol types, branding assets, and tests.
 
 `call_boot` can start a managed loopback Codex app-server, and the SQLite call board is wired for local calls, participants, messages, status, and transcripts.
 
-`call_create` now creates real Codex app-server worker threads for `fresh` calls, or for `fork` calls when `main_thread_id` is provided. `call_send` and `call_broadcast` inject call-line messages into workers with `thread/inject_items` when a participant has a thread ID.
+`call_create` is worktree-first by default: each worker gets a Git worktree, a branch, a Codex thread, and a first-class worker contract. `fresh` and `fork` remain available when a shared cwd is intentional. `call_send` and `call_broadcast` inject call-line messages into workers with `thread/inject_items` when a participant has a thread ID.
 
 `call_wake`, `call_steer`, and `call_interrupt` now move workers from parked threads into active missions through `turn/start`, `turn/steer`, and `turn/interrupt`, with active turn IDs tracked on the local board.
 
-`call_status` now reads active worker threads with `thread/read`, shows recent assistant output in `worker_progress`, reports completion/failure/interruption, and clears finished active turns from the local board.
+`call_status` now reads live worker events first, falls back to `thread/read`, shows recent assistant output in `worker_progress`, reports completion/failure/interruption, clears finished active turns from the local board, and includes health signals for long-running calls.
 
-`call_transcript` now imports worker turns with `thread/read`, caches imported worker output locally, and exports both CALL-CODEX line messages and worker assistant output under a `Worker Output` section. Each worker section marks whether output came from a live read or cached receipts, includes import timestamps, labels cached output fresh or stale, and records live-read failures.
+`call_transcript` imports worker turns from live events or `thread/read`, caches imported worker output locally, and exports both CALL-CODEX line messages and worker assistant output under a `Worker Output` section. Each worker section marks whether output came from a live read or cached receipts, includes import timestamps, labels cached output fresh or stale, and records live-read failures.
 
-The next step is richer lifecycle polish: event subscriptions and tighter Codex macOS app smoke testing.
+Marketplace copy, install docs, release notes, and branding assets now live inside `plugins/call-codex`.
 
 ## Spirit
 

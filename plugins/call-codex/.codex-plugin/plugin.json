@@ -1,7 +1,7 @@
 {
   "name": "call-codex",
   "version": "0.1.0",
-  "description": "Mac-first Codex plugin for app-server-powered calls between Codex threads.",
+  "description": "CALL-CODEX opens macOS-first, app-server-powered calls between Codex threads.",
   "author": {
     "name": "Shaikh Akram Ahmed",
     "url": "https://github.com/Akram012388"
@@ -21,8 +21,8 @@
   "mcpServers": "./.mcp.json",
   "interface": {
     "displayName": "CALL-CODEX",
-    "shortDescription": "Open app-server calls between Codex threads",
-    "longDescription": "CALL-CODEX is a macOS-first Codex plugin for super-user multi-thread calls. A main thread can boot a local app-server, create worker threads, send targeted messages, track status, and preserve a local transcript.",
+    "shortDescription": "Dial worker threads from Codex",
+    "longDescription": "CALL-CODEX is a macOS-first Codex plugin for super-user multi-thread missions. A main thread can boot a managed loopback app-server, create worktree-isolated worker threads, assign first-class roles, send call-line messages, stream worker progress, cleanly remove threads, and preserve local SQLite receipts.",
     "developerName": "Shaikh Akram Ahmed",
     "category": "Productivity",
     "capabilities": [
@@ -33,10 +33,12 @@
     ],
     "websiteURL": "https://github.com/Akram012388/call-codex",
     "brandColor": "#10A37F",
+    "composerIcon": "./assets/call-codex-composer-icon.png",
+    "logo": "./assets/call-codex-logo.png",
     "defaultPrompt": [
-      "Call Codex and spin up workers for this repo.",
-      "Open a call with backend, tests, and reviewer.",
-      "Show call status and who is on the line."
+      "Call Codex with builder and reviewer workers.",
+      "Open a worktree call for this repo.",
+      "Show call status and worker progress."
     ],
     "screenshots": []
   }
