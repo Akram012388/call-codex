@@ -79,6 +79,8 @@ The repo-local plugin lives under `plugins/call-codex` with a Codex manifest, lo
 
 For `visibility: "macos_app"`, CALL-CODEX now consumes a strict native bridge contract: `CODEX_NATIVE_APP_SERVER_URL=ws://127.0.0.1:<port>`, with optional bearer-token auth via `CODEX_NATIVE_APP_SERVER_AUTH_TOKEN_FILE`. If the host does not expose that bridge, visible worker creation fails clearly instead of creating invisible managed sessions and calling them revealed. `visibility: "background"` remains available for managed loopback workers.
 
+Use `call_bridge_status` to inspect that contract from inside the running plugin MCP process before attempting a visible macOS worker smoke test.
+
 `call_wake`, `call_steer`, and `call_interrupt` keep active missions moving through `turn/start`, `turn/steer`, and `turn/interrupt`, with active turn IDs tracked on the local board.
 
 `call_status` now reads live worker events first, falls back to `thread/read`, shows recent assistant output in `worker_progress`, reports completion/failure/interruption, clears finished active turns from the local board, and includes health signals for long-running calls.

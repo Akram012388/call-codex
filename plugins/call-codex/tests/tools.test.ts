@@ -328,6 +328,7 @@ describe("CALL-CODEX scaffold tools", () => {
   test("exposes the pro v1 call surface", () => {
     expect(toolDefinitions.map((tool) => tool.name)).toEqual([
       "call_boot",
+      "call_bridge_status",
       "call_create",
       "call_send",
       "call_broadcast",
@@ -344,6 +345,87 @@ describe("CALL-CODEX scaffold tools", () => {
       "call_close",
       "call_transcript",
     ]);
+  });
+
+  test("reports when the native host bridge is missing", async () => {
+    const result = await handleToolCall("call_bridge_status", {}) as {
+      ok?: boolean;
+      native_bridge?: {
+        ready?: boolean;
+        backend?: string;
+        discovery_source?: string;
+        url_present?: boolean;
+        blocker?: string | null;
+      };
+    };
+
+    expect(result.ok).toBe(true);
+    expect(result.native_bridge?.ready).toBe(false);
+    expect(result.native_bridge?.backend).toBe("unavailable");
+    expect(result.native_bridge?.discovery_source).toBe("unavailable");
+    expect(result.native_bridge?.url_present).toBe(false);
+    expect(result.native_bridge?.blocker).toContain(
+      "CODEX_NATIVE_APP_SERVER_URL",
+    );
+  });
+
+  test("reports when the native host bridge is ready", async () => {
+    const { server } = fakeControlAppServer();
+    process.env.CODEX_NATIVE_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
+    process.env.CODEX_THREAD_ID = "thread-from-host";
+
+    try {
+      const result = await handleToolCall("call_bridge_status", {}) as {
+        ok?: boolean;
+        native_bridge?: {
+          ready?: boolean;
+          backend?: string;
+          discovery_source?: string;
+          url_present?: boolean;
+          auth?: { enabled?: boolean };
+        };
+        host_contract?: { current_thread_id_present?: boolean };
+      };
+
+      expect(result.ok).toBe(true);
+      expect(result.native_bridge?.ready).toBe(true);
+      expect(result.native_bridge?.backend).toBe("macos_app");
+      expect(result.native_bridge?.discovery_source).toBe("native_env");
+      expect(result.native_bridge?.url_present).toBe(true);
+      expect(result.native_bridge?.auth).toEqual({ enabled: false });
+      expect(result.host_contract?.current_thread_id_present).toBe(true);
+    } finally {
+      delete process.env.CODEX_NATIVE_APP_SERVER_URL;
+      delete process.env.CODEX_THREAD_ID;
+      server.stop(true);
+    }
+  });
+
+  test("reports native host bridge auth without leaking token details", async () => {
+    const { server } = fakeControlAppServer();
+    const tokenFile = join(tmpdir(), `call-codex-token-${crypto.randomUUID()}`);
+    writeFileSync(tokenFile, "bridge-secret\n");
+    process.env.CODEX_NATIVE_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
+    process.env.CODEX_NATIVE_APP_SERVER_AUTH_TOKEN_FILE = tokenFile;
+
+    try {
+      const result = await handleToolCall("call_bridge_status", {}) as {
+        ok?: boolean;
+        native_bridge?: { auth?: { enabled?: boolean; source?: string } };
+      };
+
+      expect(result.ok).toBe(true);
+      expect(result.native_bridge?.auth).toEqual({
+        enabled: true,
+        source: "native_token_file",
+      });
+      expect(JSON.stringify(result)).not.toContain("bridge-secret");
+      expect(JSON.stringify(result)).not.toContain(tokenFile);
+    } finally {
+      delete process.env.CODEX_NATIVE_APP_SERVER_URL;
+      delete process.env.CODEX_NATIVE_APP_SERVER_AUTH_TOKEN_FILE;
+      server.stop(true);
+    }
   });
 
   test("creates a local call board entry", async () => {

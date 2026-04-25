@@ -25,6 +25,7 @@ import {
 } from "./bus";
 import {
   bootManagedAppServer,
+  discoverAppServerBridge,
   type AppServerAuth,
 } from "./app-server/manager";
 import {
@@ -82,6 +83,15 @@ export const toolDefinitions = [
           description: "Restart the managed loopback app-server.",
         },
       },
+    },
+  },
+  {
+    name: "call_bridge_status",
+    description:
+      "Check whether the Codex macOS host exposed the native app-server bridge.",
+    inputSchema: {
+      type: "object",
+      properties: {},
     },
   },
   {
@@ -1597,6 +1607,37 @@ export async function handleToolCall(name: string, args: unknown) {
   }
 
   switch (name) {
+    case "call_bridge_status": {
+      const bridge = discoverAppServerBridge();
+      const currentThreadId = process.env.CODEX_THREAD_ID?.trim() || null;
+      return {
+        ok: true,
+        tool: name,
+        status:
+          bridge.backend === "macos_app" ? "native_bridge_ready" : "blocked",
+        native_bridge: {
+          ready: bridge.backend === "macos_app" && Boolean(bridge.url),
+          backend: bridge.backend,
+          discovery_source: bridge.source,
+          url_present: Boolean(bridge.url),
+          auth: bridge.auth
+            ? { enabled: true, source: bridge.auth.source }
+            : { enabled: false },
+          blocker:
+            bridge.backend === "macos_app"
+              ? null
+              : bridge.reason ??
+                "Codex host runtime has not exposed CODEX_NATIVE_APP_SERVER_URL to this plugin MCP process.",
+        },
+        host_contract: {
+          required_env: "CODEX_NATIVE_APP_SERVER_URL",
+          optional_auth_env: "CODEX_NATIVE_APP_SERVER_AUTH_TOKEN_FILE",
+          optional_backend_env: "CODEX_NATIVE_APP_SERVER_BACKEND",
+          current_thread_id_present: Boolean(currentThreadId),
+        },
+      };
+    }
+
     case "call_boot": {
       const parsed = parse(bootSchema, name, args);
       if (!parsed.ok) return parsed;

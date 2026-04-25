@@ -37,6 +37,11 @@ when the plugin runtime exposes `CODEX_NATIVE_APP_SERVER_URL`. If the host also
 sets `CODEX_NATIVE_APP_SERVER_AUTH_TOKEN_FILE`, CALL-CODEX reads the token
 ephemerally and sends it as a WebSocket bearer token without persisting it.
 
+Run `call_bridge_status` from the plugin to check this contract from inside the
+actual MCP process. A ready bridge reports `native_bridge.ready: true` and
+`backend: "macos_app"`. A missing bridge reports the blocker clearly before any
+worker threads are created.
+
 `CALL_CODEX_APP_SERVER_URL` remains a dev/test override. It is treated as
 macOS-visible only when `CALL_CODEX_APP_SERVER_BACKEND=macos_app` is also set.
 Otherwise, CALL-CODEX keeps the honest split: native visibility fails clearly,

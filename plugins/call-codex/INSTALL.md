@@ -55,10 +55,14 @@ that token for the WebSocket handshake without storing it. Until the host bridge
 exists, use `visibility: "background"` for functional background workers, or
 expect `visibility: "macos_app"` to fail clearly.
 
+Before a visible-worker smoke test, run `call_bridge_status`. Continue only when
+it reports `native_bridge.ready: true`; otherwise the Codex host runtime has not
+yet exposed the native app-server URL to the plugin.
+
 ## Troubleshooting
 
 - If Bun dependencies are missing, run `bun install` inside `plugins/call-codex`.
 - If worker creation fails, confirm the `cwd` is inside a Git repo with at least one commit.
-- If visible macOS workers fail, confirm `CODEX_NATIVE_APP_SERVER_URL` is present in the plugin runtime.
+- If visible macOS workers fail, run `call_bridge_status` and confirm `CODEX_NATIVE_APP_SERVER_URL` is present in the plugin runtime.
 - If the Codex app sidebar looks stale after cleanup, run `call_remove_thread` first, then reopen the workspace in the Codex app.
 - If app-server startup fails, run `call_boot` again with `force_restart: true`.
