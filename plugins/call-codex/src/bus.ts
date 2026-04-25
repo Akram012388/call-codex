@@ -56,6 +56,10 @@ export type ParticipantRow = {
   current_task: string;
   active_turn_id: string;
   active_turn_started_at: string | null;
+  visible_thread_id: string;
+  visible_thread_status: string;
+  visible_thread_url: string;
+  visible_thread_attached_at: string | null;
   last_seen: string;
   created_at: string;
 };
@@ -176,6 +180,10 @@ function migrate(database: Database) {
       current_task TEXT NOT NULL DEFAULT '',
       active_turn_id TEXT NOT NULL DEFAULT '',
       active_turn_started_at TEXT,
+      visible_thread_id TEXT NOT NULL DEFAULT '',
+      visible_thread_status TEXT NOT NULL DEFAULT '',
+      visible_thread_url TEXT NOT NULL DEFAULT '',
+      visible_thread_attached_at TEXT,
       last_seen TEXT NOT NULL,
       created_at TEXT NOT NULL,
       UNIQUE(call_id, name)
@@ -230,6 +238,21 @@ function migrate(database: Database) {
     );
   } catch (error) {
     if (!String(error).includes("duplicate column name")) throw error;
+  }
+
+  for (const [column, definition] of [
+    ["visible_thread_id", "TEXT NOT NULL DEFAULT ''"],
+    ["visible_thread_status", "TEXT NOT NULL DEFAULT ''"],
+    ["visible_thread_url", "TEXT NOT NULL DEFAULT ''"],
+    ["visible_thread_attached_at", "TEXT"],
+  ] as const) {
+    try {
+      database.run(
+        `ALTER TABLE participants ADD COLUMN ${column} ${definition};`,
+      );
+    } catch (error) {
+      if (!String(error).includes("duplicate column name")) throw error;
+    }
   }
 
   database.run(`
@@ -455,6 +478,41 @@ export function setParticipantThreadId(input: {
   addEvent(input.callId, "participant.thread_linked", {
     name: input.name,
     thread_id: input.threadId,
+  });
+  return getParticipant({ callId: input.callId, name: input.name });
+}
+
+export function attachParticipantVisibleThread(input: {
+  callId: string;
+  name: string;
+  visibleThreadId?: string;
+  visibleThreadUrl?: string;
+  status?: string;
+}) {
+  const stamp = now();
+  getDb().run(
+    `UPDATE participants
+     SET visible_thread_id = COALESCE(NULLIF(?, ''), visible_thread_id),
+       visible_thread_url = COALESCE(NULLIF(?, ''), visible_thread_url),
+       visible_thread_status = ?,
+       visible_thread_attached_at = ?,
+       last_seen = ?
+     WHERE call_id = ? AND name = ?`,
+    [
+      input.visibleThreadId ?? "",
+      input.visibleThreadUrl ?? "",
+      input.status ?? "attached",
+      stamp,
+      stamp,
+      input.callId,
+      input.name,
+    ],
+  );
+  addEvent(input.callId, "participant.visible_thread_attached", {
+    name: input.name,
+    visible_thread_id: input.visibleThreadId ?? "",
+    visible_thread_url: input.visibleThreadUrl ?? "",
+    status: input.status ?? "attached",
   });
   return getParticipant({ callId: input.callId, name: input.name });
 }

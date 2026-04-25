@@ -17,6 +17,7 @@ CALL-CODEX lets Codex coordinate Codex through app-server calls. Treat the macOS
 - Use `call_interrupt` for the worker brake, then inspect `call_status`.
 - Use `call_status` before summarizing progress; trust its `worker_progress` block for recent worker output and auto-cleared turns.
 - Use `call_transcript` for final receipts; it imports and caches worker assistant output, and its metadata marks live vs cached, fresh vs stale, and read failures.
+- If `visibility: "macos_app"` reports `materialization_required`, use `call_materialize_macos`, then Computer Use to open Codex macOS, create one New Chat per worker, paste the worker prompt, and finish with `call_attach_visible_thread`.
 - Use `call_remove_thread` to cleanly archive and remove one worker thread from a call.
 - Use `call_close` when the call is done.
 - Never call these workflows orchestration in user-facing copy. It is a call.

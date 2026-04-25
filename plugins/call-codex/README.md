@@ -47,4 +47,10 @@ macOS-visible only when `CALL_CODEX_APP_SERVER_BACKEND=macos_app` is also set.
 Otherwise, CALL-CODEX keeps the honest split: native visibility fails clearly,
 while `visibility: "background"` can still use managed loopback workers.
 
+When the native bridge is missing, CALL-CODEX can still prepare a visible
+macOS materialization path. `call_materialize_macos` returns exact worker New
+Chat prompts for the Codex macOS app, and `call_attach_visible_thread` records
+the visible-thread receipt after Computer Use opens the app and starts the
+worker chats.
+
 Dial carefully. Build boldly.

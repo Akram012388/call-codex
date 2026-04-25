@@ -4,6 +4,7 @@ import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import {
   addMessage,
+  attachParticipantVisibleThread,
   buildWorkerTranscriptSectionsFromCache,
   buildTranscript,
   createCall,
@@ -284,6 +285,48 @@ export const toolDefinitions = [
     },
   },
   {
+    name: "call_materialize_macos",
+    description:
+      "Prepare exact Codex macOS New Chat prompts for making background workers visible in the app.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        call_id: { type: "string" },
+        participant: {
+          type: "string",
+          description: "Optional worker name. Omit to materialize every worker.",
+        },
+      },
+      required: ["call_id"],
+    },
+  },
+  {
+    name: "call_attach_visible_thread",
+    description:
+      "Attach a visible Codex macOS thread receipt to one CALL-CODEX worker.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        call_id: { type: "string" },
+        participant: { type: "string" },
+        visible_thread_id: {
+          type: "string",
+          description: "Visible macOS Codex thread id when known.",
+        },
+        visible_thread_url: {
+          type: "string",
+          description: "Visible macOS Codex thread URL/deep link when known.",
+        },
+        status: {
+          type: "string",
+          enum: ["prepared", "opened", "attached", "failed"],
+          default: "attached",
+        },
+      },
+      required: ["call_id", "participant"],
+    },
+  },
+  {
     name: "call_remove_thread",
     description:
       "Cleanly remove one worker thread from a call, with optional worktree cleanup.",
@@ -447,6 +490,21 @@ const whoSchema = z.object({
 const revealSchema = z.object({
   call_id: z.string().min(1),
   participant: z.string().min(1).max(64).optional(),
+});
+
+const materializeMacosSchema = z.object({
+  call_id: z.string().min(1),
+  participant: z.string().min(1).max(64).optional(),
+});
+
+const attachVisibleThreadSchema = z.object({
+  call_id: z.string().min(1),
+  participant: z.string().min(1).max(64),
+  visible_thread_id: z.string().max(200).default(""),
+  visible_thread_url: z.string().max(1_000).default(""),
+  status: z
+    .enum(["prepared", "opened", "attached", "failed"])
+    .default("attached"),
 });
 
 const removeThreadSchema = z.object({
@@ -614,6 +672,105 @@ function workerInstructions(
   ].join("\n");
 }
 
+function macosMaterializationPrompt(input: {
+  callTitle: string;
+  callId: string;
+  participant: ParticipantRow;
+}) {
+  const participant = input.participant;
+  const worktreeLine = participant.worktree_path
+    ? `Worker worktree: ${participant.worktree_path}`
+    : "Worker worktree: use the current project workspace";
+  const backgroundThreadLine = participant.thread_id
+    ? `Background receipt thread: ${participant.thread_id}`
+    : "Background receipt thread: not available";
+
+  return [
+    `You are ${participant.name}, the ${participant.role} on a CALL-CODEX call.`,
+    "",
+    `Call: ${input.callTitle}`,
+    `Call id: ${input.callId}`,
+    `Worker name: ${participant.name}`,
+    `Role: ${participant.role}`,
+    `Parent project cwd: ${participant.cwd || "current Codex project"}`,
+    worktreeLine,
+    participant.branch_name ? `Worker branch: ${participant.branch_name}` : "",
+    backgroundThreadLine,
+    "",
+    "You are being materialized as a visible Codex macOS thread for this call.",
+    "Treat this chat as your visible CALL-CODEX worker thread.",
+    "Do not redo completed work unless asked. Use the background receipt only as context.",
+    "When reporting back, be concise and include blockers early.",
+    "",
+    `Brief: ${participant.brief}`,
+    participant.capabilities_json !== "[]"
+      ? `Capabilities: ${JSON.parse(participant.capabilities_json).join(", ")}`
+      : "",
+    participant.allowed_scope
+      ? `Allowed scope: ${participant.allowed_scope}`
+      : "",
+    participant.deliverables_json !== "[]"
+      ? `Deliverables: ${JSON.parse(participant.deliverables_json).join("; ")}`
+      : "",
+    participant.reporting_contract
+      ? `Reporting contract: ${participant.reporting_contract}`
+      : "Reporting contract: report status, changed files, tests run, blockers, and next handoff.",
+    "",
+    "First response: acknowledge the call in one short line, then wait for the next call-line message unless the brief already asks for immediate work.",
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function materializeMacosParticipants(input: {
+  callId: string;
+  participants: ParticipantRow[];
+}) {
+  const bundle = getCallBundle(input.callId, false);
+  if (!bundle) return null;
+
+  return input.participants.map((participant) => {
+    const prompt = macosMaterializationPrompt({
+      callTitle: bundle.call.title,
+      callId: input.callId,
+      participant,
+    });
+    const openCommand = participant.cwd
+      ? `codex app ${JSON.stringify(participant.cwd)}`
+      : "codex app";
+
+    updateCall({
+      callId: input.callId,
+      participant: participant.name,
+      status: participant.status === "failed" ? "blocked" : participant.status,
+      summary: "Prepared visible macOS materialization prompt.",
+    });
+    attachParticipantVisibleThread({
+      callId: input.callId,
+      name: participant.name,
+      status: "prepared",
+    });
+
+    return {
+      participant: participant.name,
+      role: participant.role,
+      parent_cwd: participant.cwd,
+      worktree_path: participant.worktree_path,
+      background_thread_id: participant.thread_id,
+      visible_thread_id: participant.visible_thread_id || null,
+      visible_thread_status: "prepared",
+      open_command: openCommand,
+      computer_use_steps: [
+        "Open Codex macOS app to the parent project.",
+        "Click New chat.",
+        "Paste the worker bootstrap prompt.",
+        "Send it, then attach the resulting visible thread with call_attach_visible_thread.",
+      ],
+      prompt,
+    };
+  });
+}
+
 async function startWorkerThreads(input: {
   callId: string;
   title: string;
@@ -647,34 +804,71 @@ async function startWorkerThreads(input: {
   }
 
   let boot;
+  let materializationRequired: { reason: string } | null = null;
   try {
     boot = await bootManagedAppServer({
       requireNative: input.visibility === "macos_app",
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    for (const worker of input.workers) {
-      updateCall({
-        callId: input.callId,
-        participant: worker.name,
-        status: "failed",
-        blocker: message,
-      });
+    if (input.visibility === "macos_app") {
+      try {
+        boot = await bootManagedAppServer();
+        materializationRequired = { reason: message };
+      } catch (backgroundError) {
+        const backgroundMessage =
+          backgroundError instanceof Error
+            ? backgroundError.message
+            : String(backgroundError);
+        for (const worker of input.workers) {
+          updateCall({
+            callId: input.callId,
+            participant: worker.name,
+            status: "failed",
+            blocker: backgroundMessage,
+          });
+        }
+        return {
+          worker_threads_created: false,
+          requires_main_thread_id: false,
+          mode: input.mode,
+          visibility: input.visibility,
+          backend: "unavailable",
+          discovery_source: "unavailable",
+          macos_app_visible_backend: false,
+          materialization_required: false,
+          message: backgroundMessage,
+          native_bridge_blocker: message,
+          failures: input.workers.map((worker) => ({
+            name: worker.name,
+            error: backgroundMessage,
+          })),
+        };
+      }
+    } else {
+      for (const worker of input.workers) {
+        updateCall({
+          callId: input.callId,
+          participant: worker.name,
+          status: "failed",
+          blocker: message,
+        });
+      }
+      return {
+        worker_threads_created: false,
+        requires_main_thread_id: false,
+        mode: input.mode,
+        visibility: input.visibility,
+        backend: "unavailable",
+        discovery_source: "unavailable",
+        macos_app_visible_backend: false,
+        message,
+        failures: input.workers.map((worker) => ({
+          name: worker.name,
+          error: message,
+        })),
+      };
     }
-    return {
-      worker_threads_created: false,
-      requires_main_thread_id: false,
-      mode: input.mode,
-      visibility: input.visibility,
-      backend: "unavailable",
-      discovery_source: "unavailable",
-      macos_app_visible_backend: false,
-      message,
-      failures: input.workers.map((worker) => ({
-        name: worker.name,
-        error: message,
-      })),
-    };
   }
 
   const worktrees =
@@ -695,6 +889,8 @@ async function startWorkerThreads(input: {
       backend: boot.backend,
       discovery_source: boot.discovery.source,
       macos_app_visible_backend: boot.backend === "macos_app",
+      materialization_required: Boolean(materializationRequired),
+      native_bridge_blocker: materializationRequired?.reason,
       message:
         "Worktree mode needs a Git repo and clean worktree paths before CALL-CODEX can park worker threads.",
       worktrees,
@@ -813,6 +1009,11 @@ async function startWorkerThreads(input: {
     backend: boot.backend,
     discovery_source: boot.discovery.source,
     macos_app_visible_backend: boot.backend === "macos_app",
+    materialization_required: Boolean(materializationRequired),
+    native_bridge_blocker: materializationRequired?.reason,
+    materialization_hint: materializationRequired
+      ? "Use call_materialize_macos, then Computer Use New Chat, then call_attach_visible_thread for each visible worker."
+      : undefined,
     auth: boot.auth
       ? { enabled: true, source: boot.auth.source }
       : { enabled: false },
@@ -1708,7 +1909,10 @@ export async function handleToolCall(name: string, args: unknown) {
         tool: name,
         status: "created",
         message:
-          appServer.worker_threads_created && reveal.length > 0
+          "materialization_required" in appServer &&
+          appServer.materialization_required
+            ? "CALL-CODEX started background workers and prepared for visible macOS materialization."
+            : appServer.worker_threads_created && reveal.length > 0
             ? reveal.some((item) => item.revealed)
               ? "CALL-CODEX opened the line, started the workers, and brought them to the glass."
               : "CALL-CODEX started background workers, but native macOS thread reveal is unavailable."
@@ -1863,6 +2067,71 @@ export async function handleToolCall(name: string, args: unknown) {
           ? "CALL-CODEX brought the worker thread to the Codex app glass."
           : "CALL-CODEX could not reveal a worker thread yet.",
         reveal,
+      };
+    }
+
+    case "call_materialize_macos": {
+      const parsed = parse(materializeMacosSchema, name, args);
+      if (!parsed.ok) return parsed;
+      const bundle = getCallBundle(parsed.data.call_id, false);
+      if (!bundle) return missingCall(name, parsed.data.call_id);
+      const participants = selectParticipants(bundle, parsed.data.participant);
+      if (parsed.data.participant && participants.length === 0) {
+        return missingParticipant(
+          name,
+          parsed.data.call_id,
+          parsed.data.participant,
+        );
+      }
+      const materialization = materializeMacosParticipants({
+        callId: parsed.data.call_id,
+        participants,
+      });
+      if (!materialization) return missingCall(name, parsed.data.call_id);
+      const refreshed = getCallBundle(parsed.data.call_id, true);
+      return {
+        ok: true,
+        tool: name,
+        status: "materialization_prepared",
+        message:
+          "CALL-CODEX prepared visible macOS worker prompts. Use Computer Use to open New Chat threads, then attach the receipts.",
+        macos_materialization: {
+          strategy: "computer_use_new_chat",
+          requires_computer_use: true,
+          app_command: "codex app <parent_cwd>",
+          workers: materialization,
+        },
+        ...(refreshed ?? bundle),
+      };
+    }
+
+    case "call_attach_visible_thread": {
+      const parsed = parse(attachVisibleThreadSchema, name, args);
+      if (!parsed.ok) return parsed;
+      const participant = getParticipant({
+        callId: parsed.data.call_id,
+        name: parsed.data.participant,
+      });
+      if (!participant) {
+        return missingParticipant(
+          name,
+          parsed.data.call_id,
+          parsed.data.participant,
+        );
+      }
+      const attached = attachParticipantVisibleThread({
+        callId: parsed.data.call_id,
+        name: parsed.data.participant,
+        visibleThreadId: parsed.data.visible_thread_id,
+        visibleThreadUrl: parsed.data.visible_thread_url,
+        status: parsed.data.status,
+      });
+      return {
+        ok: true,
+        tool: name,
+        status: "visible_thread_attached",
+        participant: attached,
+        ...(getCallBundle(parsed.data.call_id, true) ?? {}),
       };
     }
 

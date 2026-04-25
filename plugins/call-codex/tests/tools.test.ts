@@ -338,6 +338,8 @@ describe("CALL-CODEX scaffold tools", () => {
       "call_interrupt",
       "call_who",
       "call_reveal",
+      "call_materialize_macos",
+      "call_attach_visible_thread",
       "call_remove_thread",
       "call_update",
       "call_status",
@@ -497,7 +499,7 @@ describe("CALL-CODEX scaffold tools", () => {
     }
   });
 
-  test("does not treat an untagged dev override as a native bridge", async () => {
+  test("treats an untagged dev override as managed materialization fallback", async () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
     const { server } = fakeControlAppServer();
     process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
@@ -512,14 +514,16 @@ describe("CALL-CODEX scaffold tools", () => {
         app_server?: {
           backend?: string;
           worker_threads_created?: boolean;
-          message?: string;
+          materialization_required?: boolean;
+          native_bridge_blocker?: string;
         };
       };
 
       expect(created.ok).toBe(true);
-      expect(result.app_server?.worker_threads_created).toBe(false);
-      expect(result.app_server?.backend).toBe("unavailable");
-      expect(result.app_server?.message).toContain(
+      expect(result.app_server?.worker_threads_created).toBe(true);
+      expect(result.app_server?.backend).toBe("managed");
+      expect(result.app_server?.materialization_required).toBe(true);
+      expect(result.app_server?.native_bridge_blocker).toContain(
         "CODEX_NATIVE_APP_SERVER_URL",
       );
     } finally {
@@ -555,28 +559,109 @@ describe("CALL-CODEX scaffold tools", () => {
     }
   });
 
-  test("does not create macOS-visible workers without a native app-server", async () => {
+  test("falls back to background workers when macOS visibility needs materialization", async () => {
     resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const { server } = fakeControlAppServer();
+    process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
 
-    const created = await handleToolCall("call_create", {
-      title: "Native required",
-      mode: "fresh",
-      workers: [{ name: "visible", role: "worker", brief: "show in app" }],
-    });
-    const result = created as {
-      app_server?: {
-        backend?: string;
-        worker_threads_created?: boolean;
+    try {
+      const created = await handleToolCall("call_create", {
+        title: "Native required",
+        mode: "fresh",
+        workers: [{ name: "visible", role: "worker", brief: "show in app" }],
+      });
+      const result = created as {
+        app_server?: {
+          backend?: string;
+          worker_threads_created?: boolean;
+          materialization_required?: boolean;
+          native_bridge_blocker?: string;
+        };
+        participants?: Array<{ status: string; thread_id: string }>;
         message?: string;
       };
-      participants?: Array<{ status: string; current_task: string }>;
-    };
 
-    expect(created.ok).toBe(true);
-    expect(result.app_server?.worker_threads_created).toBe(false);
-    expect(result.app_server?.backend).toBe("unavailable");
-    expect(result.app_server?.message).toContain("native app-server");
-    expect(result.participants?.[0]?.status).toBe("failed");
+      expect(created.ok).toBe(true);
+      expect(result.app_server?.worker_threads_created).toBe(true);
+      expect(result.app_server?.backend).toBe("managed");
+      expect(result.app_server?.materialization_required).toBe(true);
+      expect(result.app_server?.native_bridge_blocker).toContain(
+        "CODEX_NATIVE_APP_SERVER_URL",
+      );
+      expect(result.participants?.[0]?.status).toBe("running");
+      expect(result.participants?.[0]?.thread_id).toBe("thread-control");
+      expect(result.message).toContain("visible macOS materialization");
+    } finally {
+      delete process.env.CALL_CODEX_APP_SERVER_URL;
+      server.stop(true);
+    }
+  });
+
+  test("prepares and attaches visible macOS materialization receipts", async () => {
+    resetDbForTests(join(tmpdir(), `call-codex-${crypto.randomUUID()}.db`));
+    const { server } = fakeControlAppServer();
+    process.env.CALL_CODEX_APP_SERVER_URL = `ws://127.0.0.1:${server.port}`;
+
+    try {
+      const created = await handleToolCall("call_create", {
+        title: "Materialize call",
+        mode: "fresh",
+        cwd: "/tmp/call-codex-visible",
+        workers: [
+          {
+            name: "builder",
+            role: "builder",
+            brief: "Build the visible lane.",
+          },
+        ],
+      });
+      const callId = "call" in created && created.call ? created.call.id : "";
+      const prepared = await handleToolCall("call_materialize_macos", {
+        call_id: callId,
+        participant: "builder",
+      });
+      const attached = await handleToolCall("call_attach_visible_thread", {
+        call_id: callId,
+        participant: "builder",
+        visible_thread_id: "visible-thread",
+        visible_thread_url: "codex:///local/visible-thread",
+      });
+
+      const prep = prepared as {
+        macos_materialization?: {
+          requires_computer_use?: boolean;
+          workers?: Array<{ prompt: string; open_command: string }>;
+        };
+      };
+      const attach = attached as {
+        participant?: {
+          visible_thread_id?: string;
+          visible_thread_status?: string;
+          visible_thread_url?: string;
+        };
+      };
+
+      expect(prepared.ok).toBe(true);
+      expect(prep.macos_materialization?.requires_computer_use).toBe(true);
+      expect(prep.macos_materialization?.workers?.[0]?.open_command).toContain(
+        "codex app",
+      );
+      expect(prep.macos_materialization?.workers?.[0]?.prompt).toContain(
+        "You are builder",
+      );
+      expect(prep.macos_materialization?.workers?.[0]?.prompt).toContain(
+        "Build the visible lane.",
+      );
+      expect(attached.ok).toBe(true);
+      expect(attach.participant?.visible_thread_id).toBe("visible-thread");
+      expect(attach.participant?.visible_thread_status).toBe("attached");
+      expect(attach.participant?.visible_thread_url).toBe(
+        "codex:///local/visible-thread",
+      );
+    } finally {
+      delete process.env.CALL_CODEX_APP_SERVER_URL;
+      server.stop(true);
+    }
   });
 
   test("creates worker threads in first-class git worktrees by default", async () => {
